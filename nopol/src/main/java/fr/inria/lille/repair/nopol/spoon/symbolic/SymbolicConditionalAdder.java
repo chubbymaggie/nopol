@@ -1,5 +1,6 @@
 package fr.inria.lille.repair.nopol.spoon.symbolic;
 
+import fr.inria.lille.repair.common.synth.StatementType;
 import fr.inria.lille.repair.nopol.spoon.NopolProcessor;
 import gov.nasa.jpf.symbc.Debug;
 import spoon.reflect.code.CtCodeSnippetExpression;
@@ -10,7 +11,7 @@ import spoon.reflect.declaration.CtElement;
 public class SymbolicConditionalAdder extends NopolProcessor {
 
     public SymbolicConditionalAdder(CtStatement target) {
-        super(target);
+        super(target, StatementType.PRECONDITION);
         setDefaultValue("true");
         super.setType(Boolean.class);
     }
@@ -47,7 +48,6 @@ public class SymbolicConditionalAdder extends NopolProcessor {
         newIf.setParent(parent);
         element.replace(newIf);
         // this should be after the replace to avoid an StackOverflowException caused by the circular reference.
-        // see SpoonStatementPredicate
         newIf.setThenStatement(element);
         // Fix : warning: ignoring inconsistent parent for [CtElem1] ( [CtElem2] != [CtElem3] )
         newIf.getThenStatement().setParent(newIf);

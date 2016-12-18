@@ -6,10 +6,8 @@ import fr.inria.lille.spirals.repair.expression.Expression;
 
 import java.io.File;
 
-/**
- * Created by spirals on 25/03/15.
- */
 public class ExpressionPatch implements Patch {
+    private static final long serialVersionUID = -157430722893779258L;
     private final Expression expression;
     private final SourceLocation location;
     private final StatementType type;
@@ -64,4 +62,10 @@ public class ExpressionPatch implements Patch {
     public String toString() {
         return String.format("%s:%d: %s %s", location.getContainingClassName(), getLineNumber(), type, expression.toString());
     }
+
+    @Override
+    public SourceLocation getSourceLocation() {
+        return this.location;
+    }
+
 }

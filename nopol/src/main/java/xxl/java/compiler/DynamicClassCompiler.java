@@ -1,5 +1,6 @@
 package xxl.java.compiler;
 
+import fr.inria.lille.repair.common.config.Config;
 import org.slf4j.Logger;
 import xxl.java.container.classic.MetaList;
 import xxl.java.container.classic.MetaMap;
@@ -14,19 +15,19 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static java.lang.String.format;
 import static java.util.Arrays.asList;
 import static xxl.java.library.LoggerLibrary.logDebug;
 import static xxl.java.library.LoggerLibrary.loggerFor;
 
 public class DynamicClassCompiler {
 
-    public DynamicClassCompiler(URL[] classpath) {
-        this();
+    public DynamicClassCompiler(URL[] classpath, Config config) {
+        this(config);
         options = optionsWithClasspath(classpath);
     }
 
-    public DynamicClassCompiler() {
+    public DynamicClassCompiler(Config config) {
+        int complianceLevel = config.getComplianceLevel();
         options = asList("-nowarn");
         compiler = ToolProvider.getSystemJavaCompiler();
         diagnostics = new DiagnosticCollector<JavaFileObject>();
@@ -48,13 +49,13 @@ public class DynamicClassCompiler {
     }
 
     public synchronized Map<String, byte[]> javaBytecodeFor(Map<String, String> qualifiedNameAndContent, Map<String, byte[]> compiledDependencies) {
-        logDebug(logger(), format("[Compiling %d source files]", qualifiedNameAndContent.size()));
+        //logDebug(logger(), format("[Compiling %d source files]", qualifiedNameAndContent.size()));
         Collection<JavaFileObject> units = addCompilationUnits(qualifiedNameAndContent);
         fileManager().addCompiledClasses(compiledDependencies);
         CompilationTask task = compiler().getTask(null, fileManager(), diagnostics(), options(), null, units);
         runCompilationTask(task);
         Map<String, byte[]> bytecodes = collectBytecodes(qualifiedNameAndContent);
-        logDebug(logger(), format("[Compilation finished successfully (%d classes)]", bytecodes.size()));
+        //logDebug(logger(), format("[Compilation finished successfully (%d classes)]", bytecodes.size()));
         return bytecodes;
     }
 

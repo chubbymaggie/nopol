@@ -16,270 +16,238 @@
 package fr.inria.lille.repair.nopol;
 
 import com.gzoltar.core.components.Statement;
-import com.gzoltar.core.components.count.ComponentCount;
-import com.gzoltar.core.instr.testing.TestResult;
+import fr.inria.lille.commons.spoon.SpoonedClass;
+import fr.inria.lille.commons.spoon.SpoonedFile;
 import fr.inria.lille.commons.spoon.SpoonedProject;
-import fr.inria.lille.localization.StatementExt;
+import fr.inria.lille.commons.trace.RuntimeValues;
+import fr.inria.lille.localization.FaultLocalizer;
+import fr.inria.lille.localization.TestResult;
+import fr.inria.lille.repair.Main;
 import fr.inria.lille.repair.ProjectReference;
 import fr.inria.lille.repair.TestClassesFinder;
 import fr.inria.lille.repair.common.config.Config;
 import fr.inria.lille.repair.common.patch.Patch;
-import fr.inria.lille.repair.common.synth.StatementType;
 import fr.inria.lille.repair.nopol.patch.TestPatch;
+import fr.inria.lille.repair.nopol.spoon.ConditionalLoggingInstrumenter;
 import fr.inria.lille.repair.nopol.spoon.NopolProcessor;
+import fr.inria.lille.repair.nopol.spoon.NopolProcessorBuilder;
 import fr.inria.lille.repair.nopol.spoon.symbolic.AssertReplacer;
 import fr.inria.lille.repair.nopol.spoon.symbolic.TestExecutorProcessor;
-import fr.inria.lille.repair.nopol.sps.gzoltar.GZoltarSuspiciousProgramStatements;
-import fr.inria.lille.repair.nopol.synth.Synthesizer;
-import fr.inria.lille.repair.nopol.synth.SynthesizerFactory;
+import fr.inria.lille.repair.nopol.synth.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import spoon.processing.Processor;
+import spoon.reflect.code.CtStatement;
+import xxl.java.compiler.DynamicCompilationException;
 import xxl.java.junit.TestCase;
 import xxl.java.junit.TestCasesListener;
 import xxl.java.junit.TestSuiteExecution;
 
 import java.io.File;
 import java.io.IOException;
-import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.util.*;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 
-import static fr.inria.lille.repair.common.patch.Patch.NO_PATCH;
 
 /**
  * @author Favio D. DeMarco
  */
 public class NoPol {
 
-    public static Statement currentStatement;
-    private URL[] classpath;
-    private GZoltarSuspiciousProgramStatements gZoltar;
-    private final TestPatch testPatch;
-    private final Logger logger = LoggerFactory.getLogger(this.getClass());
-    private final SpoonedProject spooner;
-    private final File[] sourceFiles;
-    private final StatementType type;
-    private static boolean singlePatch = true;
-    private String[] testClasses;
-    public long startTime;
+	private FaultLocalizer localizer;
 
-    public NoPol(ProjectReference project, StatementType type) {
-        this.classpath = project.classpath();
-        this.sourceFiles = project.sourceFiles();
-        this.testClasses = project.testClasses();
-        this.type = type;
-
-        // get all test classes of the current project
-        /*if (this.testClasses == null || this.testClasses.length == 0) {
-			this.testClasses = new TestClassesFinder().findIn(classpath, false);
-		}*/
-        spooner = new SpoonedProject(this.sourceFiles, classpath);
-        testPatch = new TestPatch(sourceFiles[0], spooner);
-        startTime = System.currentTimeMillis();
-    }
-
-    public NoPol(final File[] sourceFiles, final URL[] classpath, StatementType type) {
-        this(new ProjectReference(sourceFiles, classpath), type);
-    }
-
-    public List<Patch> build() {
-        this.testClasses = new TestClassesFinder().findIn(classpath, false);
-        return build(testClasses);
-    }
-
-    public List<Patch> build(String[] testClasses) {
-        gZoltar = GZoltarSuspiciousProgramStatements.create(this.classpath, testClasses);
-        Collection<Statement> statements = gZoltar.sortBySuspiciousness(testClasses);
-        if (statements.isEmpty()) {
-            throw new RuntimeException("No suspicious statements found.");
-        }
-
-        Map<SourceLocation, List<TestResult>> testListPerStatement = getTestListPerStatement();
-
-        if (Config.INSTANCE.getOracle() == Config.NopolOracle.SYMBOLIC) {
-            try {
-                this.classpath = addJPFLibraryToCassPath(classpath);
-                SpoonedProject jpfSpoon = new SpoonedProject(this.sourceFiles, classpath);
-                String mainClass = "nopol.repair.NopolTestRunner";
-                TestExecutorProcessor.createMainTestClass(jpfSpoon, mainClass);
-                jpfSpoon.process(new AssertReplacer());
-
-                final File outputSourceFile = new File("src-gen");
-                final File outputCompiledFile = new File("target-gen");
-                // generate the output file
-                jpfSpoon.generateOutputFile(outputSourceFile);
-                jpfSpoon.generateOutputCompiledFile(outputCompiledFile);
-            } catch (IOException e) {
-                throw new RuntimeException("Unable to write transformed test", e);
-            }
-        }
-
-        return solveWithMultipleBuild(statements, testListPerStatement);
-    }
-
-    private Map<SourceLocation, List<TestResult>> getTestListPerStatement() {
-        Map<SourceLocation, List<TestResult>> results = new HashMap<>();
-        List<TestResult> testResults = gZoltar.getGzoltar().getTestResults();
-        for (int i = 0; i < testResults.size(); i++) {
-            TestResult testResult = testResults.get(i);
-            List<ComponentCount> components = testResult.getCoveredComponents();
-            for (int j = 0; j < components.size(); j++) {
-                Statement component = (Statement) components.get(j).getComponent();
-                SourceLocation sourceLocation = new SourceLocation(component.getMethod().getParent().getLabel(), component.getLineNumber());
-                if (!results.containsKey(sourceLocation)) {
-                    results.put(sourceLocation, new ArrayList<TestResult>());
-                }
-                results.get(sourceLocation).add(testResult);
-            }
-        }
-        return results;
-    }
-
-    /*
-     * First algorithm of Nopol,
-     * build the initial model
-     * apply only one modification
-     * build
-     * try to find patch
-     */
-    private List<Patch> solveWithMultipleBuild(Collection<Statement> statements, Map<SourceLocation, List<TestResult>> testListPerStatement) {
-        List<Patch> patches = new ArrayList<>();
-
-        for (Iterator<Statement> iterator = statements.iterator(); iterator.hasNext() &&
-                // limit the execution time
-                System.currentTimeMillis() - startTime <= TimeUnit.MINUTES.toMillis(Config.INSTANCE.getMaxTime()); ) {
-            Statement statement = iterator.next();
-            if (((StatementExt) statement).getEf() == 0) {
-                continue;
-            }
-			/*if(((StatementExt)statement).getNf() != 0) {
-				continue;
-			}*/
-            try {
-                if (isInTest(statement))
-                    continue;
-                NoPol.currentStatement = statement;
-                logger.debug("Analysing {}", statement);
-                SourceLocation sourceLocation = new SourceLocation(statement.getMethod().getParent().getName(), statement.getLineNumber());
-                Synthesizer synth = new SynthesizerFactory(sourceFiles, spooner, type).getFor(sourceLocation);
-
-                if (synth == Synthesizer.NO_OP_SYNTHESIZER) {
-                    continue;
-                }
-
-                List<TestResult> tests = testListPerStatement.get(sourceLocation);
+	public static Statement currentStatement;
+	private URL[] classpath;
+	private final TestPatch testPatch;
+	private final Logger logger = LoggerFactory.getLogger(this.getClass());
+	private final SpoonedProject spooner;
+	private final File[] sourceFiles;
+	private String[] testClasses;
+	public long startTime;
+	private Config config;
 
 
-                Set<String> failingClassTest = new HashSet<>();
-                for (int i = 0; i < tests.size(); i++) {
-                    TestResult testResult = tests.get(i);
-                    if (!testResult.wasSuccessful()) {
-                        failingClassTest.add(testResult.getName().split("#")[0]);
-                    }
-                }
-                Collection<TestCase> failingTest = failingTests(failingClassTest.toArray(new String[0]), new URLClassLoader(classpath));
+	public NoPol(ProjectReference project, Config config) {
+		this.config = config;
+		this.classpath = project.classpath();
+		this.sourceFiles = project.sourceFiles();
+		this.spooner = new SpoonedProject(this.sourceFiles, this.classpath, config);
+		if (project.testClasses() != null) {
+			this.testClasses = project.testClasses();
+		}
+		this.testPatch = new TestPatch(this.sourceFiles[0], this.spooner, config);
+		this.startTime = System.currentTimeMillis();
+	}
 
-                if (failingTest.isEmpty()) {
-                    continue;
-                }
-                Patch patch = synth.buildPatch(classpath, tests, failingTest, Config.INSTANCE.getMaxTimeBuildPatch());
-                if (isOk(patch, gZoltar.getGzoltar().getTestResults(), synth.getProcessor())) {
-                    patches.add(patch);
-                    if (isSinglePatch()) {
-                        break;
-                    }
-                } else {
-                    logger.debug("Could not find a patch in {}", statement);
-                }
-            } catch (RuntimeException re) {
-                re.printStackTrace();
-            }
-        }
-        return patches;
-    }
+	public NoPol(final File[] sourceFiles, final URL[] classpath, Config config) {
+		this(new ProjectReference(sourceFiles, classpath), config);
+	}
 
-    private boolean isInTest(Statement statement) {
-        if (statement.getMethod().getParent().getName()
-                .contains("Test")) {
-            return true;
-        }
-        return false;
-    }
+	public List<Patch> build() {
+		this.testClasses = new TestClassesFinder().findIn(classpath, false);
+		return build(this.testClasses);
+	}
 
-    private boolean isOk(Patch newRepair, List<TestResult> testClasses, NopolProcessor processor) {
-        if (newRepair == NO_PATCH) {
-            return false;
-        }
-        logger.trace("Suggested patch: {}", newRepair);
-        return testPatch.passesAllTests(newRepair, testClasses, processor);
-    }
+	public List<Patch> build(String[] testClasses) {
+		this.localizer = config.getLocalizer(this.sourceFiles, this.classpath, testClasses);
+		if (config.getOracle() == Config.NopolOracle.SYMBOLIC) {
+			try {
+				SpoonedProject jpfSpoon = new SpoonedProject(this.sourceFiles, classpath, config);
+				String mainClass = "nopol.repair.NopolTestRunner";
+				TestExecutorProcessor.createMainTestClass(jpfSpoon, mainClass);
+				jpfSpoon.process(new AssertReplacer());
 
-    public static boolean isSinglePatch() {
-        return singlePatch;
-    }
+				final File outputSourceFile = new File("src-gen");
+				final File outputCompiledFile = new File("target-gen");
+				// generate the output file
+				jpfSpoon.generateOutputFile(outputSourceFile);
+				jpfSpoon.generateOutputCompiledFile(outputCompiledFile);
+			} catch (IOException e) {
+				throw new RuntimeException("Unable to write transformed test", e);
+			}
+		}
+		return solveWithMultipleBuild(this.localizer.getTestListPerStatement());
+	}
 
-    public static boolean setSinglePatch(boolean singlePatch) {
-        return NoPol.singlePatch = singlePatch;
-    }
 
-    /**
-     * returns the list of failing tests
-     *
-     * @param testClasses
-     * @return the list of failing tests
-     */
-    private Collection<TestCase> failingTests(String[] testClasses,
-                                              ClassLoader testClassLoader) {
-        TestCasesListener listener = new TestCasesListener();
-        TestSuiteExecution.runCasesIn(testClasses, testClassLoader, listener);
-        return listener.failedTests();
-    }
+	/*
+	 * First algorithm of Nopol,
+	 * build the initial model
+	 * apply only one modification
+	 * build
+	 * try to find patch
+	 */
+	private List<Patch> solveWithMultipleBuild(Map<SourceLocation, List<TestResult>> testListPerStatement) {
+		List<Patch> patches = new ArrayList<>();
+		for (SourceLocation sourceLocation : testListPerStatement.keySet()) {
+			patches.addAll(runOnStatement(sourceLocation, testListPerStatement.get(sourceLocation)));
+			if (config.isOnlyOneSynthesisResult() && !patches.isEmpty()) {
+				return patches;
+			}
+		}
+		return patches;
+	}
 
-    private Collection<TestCase> failingTests(String[] testClasses) {
-        TestCasesListener listener = new TestCasesListener();
-        TestSuiteExecution.runCasesIn(testClasses, spooner.dumpedToClassLoader(), listener);
-        return listener.failedTests();
-    }
+	private List<Patch> runOnStatement(SourceLocation sourceLocation, List<TestResult> tests) {
+		List<Patch> patches = new ArrayList<>();
+		logger.debug("Analysing {}", sourceLocation);
+		SpoonedClass spoonCl = spooner.forked(sourceLocation.getRootClassName());
+		if (spoonCl == null || spoonCl.getSimpleType() == null) {
+			return patches;
+		}
+		NopolProcessorBuilder builder = new NopolProcessorBuilder(spoonCl.getSimpleType().getPosition().getFile(), sourceLocation.getLineNumber(), config);
+		try {
+			spoonCl.process(builder);
+		} catch (DynamicCompilationException ignored) {
+			logger.debug("Aborting: dynamic compilation failed");
+			return patches;
+		}
+		final List<NopolProcessor> nopolProcessors = builder.getNopolProcessors();
+		for (NopolProcessor nopolProcessor : nopolProcessors) {
+			patches.addAll(executeNopolProcessor(tests, sourceLocation, spoonCl, nopolProcessor));
+			if (config.isOnlyOneSynthesisResult() && !patches.isEmpty()) {
+				return patches;
+			}
+		}
+		return patches;
+	}
 
-    /**
-     * Add JPF library to class path
-     *
-     * @param clpath
-     */
-    private URL[] addJPFLibraryToCassPath(URL[] clpath) {
+	/**
+	 * Method used as proxy for runNopolProcessor to handle timeout
+	 */
+	private List<Patch> executeNopolProcessor(final List<TestResult> tests, final SourceLocation sourceLocation, final SpoonedClass spoonCl, final NopolProcessor nopolProcessor) {
+		final ExecutorService executor = Executors.newSingleThreadExecutor();
+		final Future nopolExecution = executor.submit(
+				new Callable() {
+					@Override
+					public Object call() throws Exception {
+						return runNopolProcessor(tests, sourceLocation, spoonCl, nopolProcessor);
+					}
+				});
+		try {
+			return (List) nopolExecution.get(config.getMaxTimeEachTypeOfFixInMinutes(), TimeUnit.MINUTES);
+		} catch (ExecutionException | InterruptedException | TimeoutException exception) {
+			LoggerFactory.getLogger(Main.class).error("Timeout: execution time > " + config.getMaxTimeInMinutes() + " " + TimeUnit.MINUTES, exception);
+			return Collections.emptyList();
+		}
+	}
 
-        List<URL> classpath = new ArrayList<>();
-        for (int i = 0; i < clpath.length; i++) {
-            classpath.add(clpath[i]);
-        }
-        try {
-            File file = new File("lib/jpf/jpf-classes.jar");
-            if(!classpath.contains(file.toURL())) {
-                classpath.add(file.toURL());
-            }
-            // file = new File("lib/jpf/gov.nasa-0.0.1.jar");
-            // classpath[classpath.length - 3] = file.toURL();
-            file = new File("lib/jpf/jpf-annotations.jar");
-            if(!classpath.contains(file.toURL())) {
-                classpath.add(file.toURL());
-            }
-            file = new File("misc/nopol-example/junit-4.11.jar");
-            if(!classpath.contains(file.toURL())) {
-                classpath.add(file.toURL());
-            }
-        } catch (MalformedURLException e) {
-            throw new RuntimeException("JPF dependencies not found");
-        }
-        return classpath.toArray(new URL[]{});
-    }
+	private List<Patch> runNopolProcessor(List<TestResult> tests, SourceLocation sourceLocation, SpoonedClass spoonCl, NopolProcessor nopolProcessor) {
+		AngelicValue angelicValue;
+		List<Patch> patches = new ArrayList<>();
+		try {
+			angelicValue = buildConstraintsModelBuilder(nopolProcessor, sourceLocation, spooner);
+		} catch (UnsupportedOperationException | DynamicCompilationException ignored) {
+			return patches;
+		}
+		Synthesizer synth = SynthesizerFactory.build(sourceFiles, spooner, config, sourceLocation, nopolProcessor, angelicValue, spoonCl);
+		if (synth == Synthesizer.NO_OP_SYNTHESIZER) {
+			return patches;
+		}
+		Collection<TestCase> failingTest = reRunFailingTestCases(getFailingTestCase(tests), new URLClassLoader(classpath));
+		if (failingTest.isEmpty()) {
+			return patches;
+		}
+		List<Patch> tmpPatches = synth.buildPatch(classpath, tests, failingTest, config.getMaxTimeBuildPatch());
+		for (int i = 0; i < tmpPatches.size(); i++) {
+			Patch patch = tmpPatches.get(i);
+			if (isOk(patch, tests, synth.getProcessor())) {
+				patches.add(patch);
+				if (config.isOnlyOneSynthesisResult()) {
+					return patches;
+				}
+			} else {
+				logger.debug("Could not find a patch in {}", sourceLocation);
+			}
+		}
+		return patches;
+	}
 
-    public SpoonedProject getSpooner() {
-        return spooner;
-    }
+	private AngelicValue buildConstraintsModelBuilder(NopolProcessor nopolProcessor, SourceLocation statement, SpoonedFile spoonCl) {
+		if (Boolean.class.equals(config.getType().getType())) {
+			RuntimeValues<Boolean> runtimeValuesInstance = RuntimeValues.newInstance();
+			switch (config.getOracle()) {
+				case ANGELIC:
+					Processor<CtStatement> processor = new ConditionalLoggingInstrumenter(runtimeValuesInstance, nopolProcessor);
+					return new ConstraintModelBuilder(runtimeValuesInstance, statement, processor, spooner, config);
+				case SYMBOLIC:
+					return new JPFRunner<>(runtimeValuesInstance, statement, nopolProcessor, spoonCl, spooner, config);
+			}
+		}
+		throw new UnsupportedOperationException();
+	}
 
-    public GZoltarSuspiciousProgramStatements getgZoltar() {
-        return gZoltar;
-    }
+	private boolean isOk(Patch newRepair, List<TestResult> testClasses, NopolProcessor processor) {
+		logger.trace("Suggested patch: {}", newRepair);
+		try {
+			return testPatch.passesAllTests(newRepair, testClasses, processor);
+		} catch (DynamicCompilationException e) {
+			logger.error("Patch malformed " + newRepair.asString(), e);
+			return false;
+		}
+	}
+
+	private String[] getFailingTestCase(List<TestResult> tests) {
+		Set<String> failingClassTest = new HashSet<>();
+		for (int i = 0; i < tests.size(); i++) {
+			TestResult testResult = tests.get(i);
+			if (!testResult.isSuccessful()) {
+				failingClassTest.add(testResult.getTestCase().className());
+			}
+		}
+		return failingClassTest.toArray(new String[0]);
+	}
+
+	private Collection<TestCase> reRunFailingTestCases(String[] testClasses, ClassLoader testClassLoader) {
+		TestCasesListener listener = new TestCasesListener();
+		TestSuiteExecution.runCasesIn(testClasses, testClassLoader, listener, this.config);
+		return listener.failedTests();
+	}
+
+	public SpoonedProject getSpooner() {
+		return spooner;
+	}
+
 }

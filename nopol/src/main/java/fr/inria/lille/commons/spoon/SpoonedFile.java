@@ -32,25 +32,26 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
-import static java.lang.String.format;
 import static java.util.Arrays.asList;
-import static xxl.java.library.LoggerLibrary.logDebug;
 import static xxl.java.library.LoggerLibrary.loggerFor;
 
 public abstract class SpoonedFile {
 
+    protected final Config config;
+
     protected abstract Collection<? extends CtType<?>> modelledClasses();
 
-    public SpoonedFile(File[] sourceFiles, URL[] projectClasspath) {
-        logDebug(logger(), format("[Building Spoon model from %s]", sourceFiles));
+    public SpoonedFile(File[] sourceFiles, URL[] projectClasspath, Config config) {
+        //logDebug(logger(), format("[Building Spoon model from %s]", sourceFiles));
+        this.config = config;
         this.sourceFiles = sourceFiles;
         this.projectClasspath = projectClasspath;
         factory = SpoonModelLibrary.newFactory();
-        factory.getEnvironment().setComplianceLevel(Config.INSTANCE.getComplianceLevel());
+        factory.getEnvironment().setComplianceLevel(config.getComplianceLevel());
         factory.getEnvironment().setGenerateJavadoc(false);
         factory.getEnvironment().setLevel(Level.OFF.toString());
         factory = SpoonModelLibrary.modelFor(factory, sourceFiles, projectClasspath());
-        compiler = new DynamicClassCompiler(compilationClasspath());
+        compiler = new DynamicClassCompiler(compilationClasspath(), config);
         manager = new RuntimeProcessingManager(spoonFactory());
         compiledClasses = MetaMap.newHashMap();
         prettyPrinter = new DefaultJavaPrettyPrinter(spoonEnvironment());
@@ -134,14 +135,14 @@ public abstract class SpoonedFile {
         setProcessors(processors);
         for (CtType<?> modelledClass : modelledClasses) {
             String qualifiedName = modelledClass.getQualifiedName();
-            logDebug(logger(), format("[Spoon processing of %s]", qualifiedName));
+            //logDebug(logger(), format("[Spoon processing of %s]", qualifiedName));
             processingManager().process(modelledClass);
         }
         compileModelledClasses(modelledClasses);
     }
 
     private void setProcessors(Collection<? extends Processor<?>> processors) {
-        processingManager().clear();
+        processingManager().getProcessors().clear();
         for (Processor<?> processor : processors) {
             processingManager().addProcessor(processor);
         }
@@ -159,7 +160,7 @@ public abstract class SpoonedFile {
     }
 
     protected synchronized String sourceForModelledClass(CtType<?> modelledClass) {
-        logDebug(logger(), format("[Scanning source code of %s]", modelledClass.getQualifiedName()));
+        //logDebug(logger(), format("[Scanning source code of %s]", modelledClass.getQualifiedName()));
         prettyPrinter().scan(modelledClass);
         String packageDeclaration = "package " + modelledClass.getPackage().getQualifiedName() + ";";
         String sourceCode = packageDeclaration + JavaLibrary.lineSeparator() + prettyPrinter().toString();

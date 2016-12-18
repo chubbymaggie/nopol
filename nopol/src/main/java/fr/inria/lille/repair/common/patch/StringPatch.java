@@ -25,6 +25,7 @@ import java.io.File;
  */
 public class StringPatch implements Patch {
 
+    private static final long serialVersionUID = 1150517609100930111L;
     private final SourceLocation location;
     private final String repair;
     private final StatementType type;
@@ -75,6 +76,11 @@ public class StringPatch implements Patch {
     @Override
     public StatementType getType() {
         return type;
+    }
+
+    @Override
+    public SourceLocation getSourceLocation() {
+        return this.location;
     }
 
     /**
