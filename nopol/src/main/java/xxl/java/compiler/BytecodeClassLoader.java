@@ -1,18 +1,18 @@
 package xxl.java.compiler;
 
+import fr.inria.lille.repair.common.BottomTopURLClassLoader;
 import xxl.java.container.classic.MetaMap;
 import xxl.java.library.StringLibrary;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.net.URL;
-import java.net.URLClassLoader;
 import java.util.Map;
 
-public class BytecodeClassLoader extends URLClassLoader {
+public class BytecodeClassLoader extends BottomTopURLClassLoader {
 
     protected BytecodeClassLoader(URL[] classpath) {
-        super(classpath);
+        super(classpath, Thread.currentThread().getContextClassLoader());
     }
 
     protected BytecodeClassLoader(URL[] classpath, ClassLoader parentClassLoader) {

@@ -31,8 +31,9 @@ public class NopolActorTest {
 		String ACTOR_NAME = config.getString("nopol.actor.name");
 		system = ActorSystem.create(ACTOR_SYSTEM_NAME, config);
 		actorNopol = system.actorOf(Props.create(NoPolActor.class, system), ACTOR_NAME);
+
 		ActorRef actorClient = system.actorOf(Props.create(ActorClient.class, "../test-projects",fullQualifiedNameTest, patchAsString), "Client");
-		Timeout timeout = new Timeout(10000);
+		Timeout timeout = new Timeout(30000);
 		Future<Object> future = Patterns.ask(actorClient, "start", timeout);
 		Patch patch = (Patch) Await.result(future, timeout.duration());
 		assertEquals(patchAsString, patch.asString());

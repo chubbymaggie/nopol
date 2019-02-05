@@ -1,14 +1,19 @@
 package xxl.java.compiler;
 
-import fr.inria.lille.repair.common.config.Config;
 import org.slf4j.Logger;
 import xxl.java.container.classic.MetaList;
 import xxl.java.container.classic.MetaMap;
 import xxl.java.library.JavaLibrary;
 import xxl.java.library.StringLibrary;
 
-import javax.tools.*;
+import javax.tools.Diagnostic;
+import javax.tools.DiagnosticCollector;
+import javax.tools.JavaCompiler;
 import javax.tools.JavaCompiler.CompilationTask;
+import javax.tools.JavaFileObject;
+import javax.tools.StandardJavaFileManager;
+import javax.tools.StandardLocation;
+import javax.tools.ToolProvider;
 import java.net.URL;
 import java.util.Collection;
 import java.util.HashMap;
@@ -16,19 +21,25 @@ import java.util.List;
 import java.util.Map;
 
 import static java.util.Arrays.asList;
-import static xxl.java.library.LoggerLibrary.logDebug;
+import static xxl.java.library.LoggerLibrary.logError;
 import static xxl.java.library.LoggerLibrary.loggerFor;
 
 public class DynamicClassCompiler {
 
-    public DynamicClassCompiler(URL[] classpath, Config config) {
-        this(config);
+    public DynamicClassCompiler(URL[] classpath, int compliance) {
+        this(compliance);
         options = optionsWithClasspath(classpath);
     }
+    public DynamicClassCompiler(URL[] classpath) {
+        this(classpath, 7);
+    }
 
-    public DynamicClassCompiler(Config config) {
-        int complianceLevel = config.getComplianceLevel();
-        options = asList("-nowarn");
+    public DynamicClassCompiler() {
+        this(7);
+    }
+
+    public DynamicClassCompiler(int compliance) {
+        options = asList("-nowarn", "-source", "1." + compliance, "-target", "1." + compliance);
         compiler = ToolProvider.getSystemJavaCompiler();
         diagnostics = new DiagnosticCollector<JavaFileObject>();
         StandardJavaFileManager standardFileManager = compiler().getStandardFileManager(diagnostics(), null, null);
@@ -84,7 +95,7 @@ public class DynamicClassCompiler {
             for (Diagnostic<? extends JavaFileObject> diagnostic : diagnostics().getDiagnostics()) {
                 errors.add(diagnostic.toString());
             }
-            logDebug(logger(), errors);
+            logError(logger(), errors);
             throw new DynamicCompilationException("Aborting: dynamic compilation failed");
         }
         return success;

@@ -2,9 +2,9 @@ package actor;
 
 import akka.actor.ActorRef;
 import akka.actor.UntypedActor;
-import fr.inria.lille.repair.common.config.Config;
+import fr.inria.lille.repair.common.config.NopolContext;
 import fr.inria.lille.repair.common.patch.Patch;
-import fr.inria.lille.repair.common.synth.StatementType;
+import fr.inria.lille.repair.common.synth.RepairType;
 
 import java.io.File;
 import java.nio.file.Files;
@@ -44,12 +44,12 @@ public class ActorClient extends UntypedActor {
 			ziper.zipIt("target", new File(System.getenv().get("HOME")+"/.m2/repository/junit/junit/4.11/junit-4.11.jar"));
 			ziper.close();
 			byte [] content = Files.readAllBytes(Paths.get(outputZip.getAbsolutePath()));
-			Config config = new Config();
+			NopolContext nopolContext = new NopolContext();
 			this.sender = getSender();//keeping the executed test in order to send it the result
-			config.setType(StatementType.CONDITIONAL);
-			config.setSynthesis(Config.NopolSynthesis.DYNAMOTH);
-			config.setProjectTests(new String[]{fullQualifiedNameTest});
-			ConfigActor configActor = new ConfigActorImpl(config, content);
+			nopolContext.setType(RepairType.CONDITIONAL);
+			nopolContext.setSynthesis(NopolContext.NopolSynthesis.DYNAMOTH);
+			nopolContext.setProjectTests(new String[]{fullQualifiedNameTest});
+			ConfigActor configActor = new ConfigActorImpl(nopolContext, content);
 			configActor.setClient(getSelf());
 			actorNopol.tell(configActor, getSelf());
 			//NoPol's response handeling

@@ -20,13 +20,17 @@ import com.martiansoftware.jsap.FlaggedOption;
 import com.martiansoftware.jsap.JSAP;
 import com.martiansoftware.jsap.JSAPException;
 import com.martiansoftware.jsap.JSAPResult;
+import com.martiansoftware.jsap.QualifiedSwitch;
 import fr.inria.lille.commons.synthesis.smt.solver.SolverFactory;
-import fr.inria.lille.repair.common.config.Config;
-import fr.inria.lille.repair.common.synth.StatementType;
+import fr.inria.lille.repair.common.config.NopolContext;
+import fr.inria.lille.repair.common.synth.RepairType;
 import fr.inria.lille.repair.infinitel.Infinitel;
-import fr.inria.lille.repair.nopol.NoPolLauncher;
+import fr.inria.lille.repair.nopol.NoPol;
+import fr.inria.lille.repair.nopol.NopolResult;
+import fr.inria.lille.repair.nopol.NopolStatus;
 import fr.inria.lille.repair.ranking.Ranking;
 import org.slf4j.LoggerFactory;
+import xxl.java.junit.CustomClassLoaderThreadFactory;
 import xxl.java.library.FileLibrary;
 import xxl.java.library.JavaLibrary;
 
@@ -34,22 +38,43 @@ import java.io.File;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.util.Iterator;
-import java.util.concurrent.*;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 public class Main {
-	private static JSAP jsap = new JSAP();
+	private JSAP jsap;
+	private NopolContext nopolContext;
+
+	public Main() {
+		this.jsap = new JSAP();
+	}
+
+	public NopolContext getNopolContext() {
+		return nopolContext;
+	}
 
 	public static void main(String[] args) {
 		int returnCode = -1;
+		Main main = new Main();
+		NopolResult result = null;
 		try {
-			final Config config = new Config();
-			initJSAP();
-			if (!parseArguments(args, config)) {
+			main.initJSAP();
+			if (!main.parseArguments(args)) {
 				return;
 			}
 
+			final NopolContext nopolContext = main.getNopolContext();
+
+			// use currentDir to compute diff path
+			File currentDir = new File(".");
+			nopolContext.setRootProject(currentDir.getCanonicalFile().toPath().toAbsolutePath());
+
 			//For using Dynamoth, you must add tools.jar in the classpath
-			if (config.getSynthesis() == Config.NopolSynthesis.DYNAMOTH) {
+			if (nopolContext.getSynthesis() == NopolContext.NopolSynthesis.DYNAMOTH) {
 				URLClassLoader loader = (URLClassLoader) ClassLoader.getSystemClassLoader();
 				try {
 					loader.loadClass("com.sun.jdi.Value");
@@ -59,54 +84,54 @@ public class Main {
 				}
 			}
 
-			final File[] sourceFiles = new File[config.getProjectSourcePath().length];
-			for (int i = 0; i < config.getProjectSourcePath().length; i++) {
-				String path = config.getProjectSourcePath()[i];
-				File sourceFile = FileLibrary.openFrom(path);
-				sourceFiles[i] = sourceFile;
-			}
-
-			final URL[] classpath = JavaLibrary.classpathFrom(config.getProjectClasspath());
-
-
-			switch (config.getMode()) {
+			switch (nopolContext.getMode()) {
 				case REPAIR:
-					switch (config.getType()) {
+					switch (nopolContext.getType()) {
 						case LOOP:
-							ProjectReference project = new ProjectReference(sourceFiles, classpath, config.getProjectTests());
-							Infinitel infinitel = new Infinitel(project, config);
+							Infinitel infinitel = new Infinitel(nopolContext);
 							infinitel.repair();
 							break;
 						default:
-							final ExecutorService executor = Executors.newSingleThreadExecutor();
-							final Future nopolExecution = executor.submit(
+							final NoPol nopol = new NoPol(nopolContext);
+							final ExecutorService executor = Executors.newSingleThreadExecutor(new CustomClassLoaderThreadFactory(Thread.currentThread().getContextClassLoader()));
+							final Future<NopolResult> nopolExecution = executor.submit(
 									new Callable() {
 										@Override
 										public Object call() throws Exception {
-											return NoPolLauncher.launch(sourceFiles, classpath, config).isEmpty() ? -1 : 0;
+											return nopol.build();
 										}
 									});
 							try {
-								returnCode = (int) nopolExecution.get(config.getMaxTimeInMinutes(), TimeUnit.MINUTES);
+								executor.shutdown();
+								result = nopolExecution.get(nopolContext.getMaxTimeInMinutes(), TimeUnit.MINUTES);
 							} catch (TimeoutException exception) {
-								LoggerFactory.getLogger(Main.class).error("Timeout: execution time > " + config.getMaxTimeInMinutes() + " " + TimeUnit.MINUTES, exception);
+
+								result = nopol.getNopolResult();
+								result.setNopolStatus(NopolStatus.TIMEOUT);
+								LoggerFactory.getLogger(Main.class).error("Timeout: execution time > " + nopolContext.getMaxTimeInMinutes() + " " + TimeUnit.MINUTES, exception);
 							}
 							break;
 					}
 					break;
 				case RANKING:
-					Ranking ranking = new Ranking(sourceFiles, classpath, config.getProjectTests());
+					Ranking ranking = new Ranking(nopolContext);
 					System.out.println(ranking.summary());
 					break;
 			}
 		} catch (Exception e) {
 			e.printStackTrace();
-			showUsage();
+			main.showUsage();
 		}
+		if (result != null) {
+			System.out.println(result.getNopolStatus());
+
+			returnCode = (result.getPatches().isEmpty()) ? -1 : 0;
+		}
+
 		System.exit(returnCode);
 	}
 
-	private static void showUsage() {
+	private void showUsage() {
 		System.err.println();
 		System.err.println("Usage: java -jar nopol.jar");
 		System.err.println("                          " + jsap.getUsage());
@@ -115,7 +140,7 @@ public class Main {
 	}
 
 
-	private static boolean parseArguments(String[] args, Config config) {
+	private boolean parseArguments(String[] args) {
 		JSAPResult jsapConfig = jsap.parse(args);
 		if (!jsapConfig.success()) {
 			System.err.println();
@@ -125,87 +150,98 @@ public class Main {
 			showUsage();
 			return false;
 		}
-
-		config.setType(strToStatementType(jsapConfig.getString("type")));
-		config.setMode(strToMode(jsapConfig.getString("mode")));
-		config.setSynthesis(strToSynthesis(jsapConfig.getString("synthesis")));
-		config.setOracle(strToOracle(jsapConfig.getString("oracle")));
-		config.setSolver(strToSolver(jsapConfig.getString("solver")));
-		if (jsapConfig.getString("solverPath") != null) {
-			config.setSolverPath(jsapConfig.getString("solverPath"));
-			SolverFactory.setSolver(config.getSolver(), config.getSolverPath());
+		String[] sources = jsapConfig.getStringArray("source");
+		final File[] sourceFiles = new File[sources.length];
+		for (int i = 0; i < sources.length; i++) {
+			String path = sources[i];
+			File sourceFile = FileLibrary.openFrom(path);
+			sourceFiles[i] = sourceFile;
 		}
-		config.setProjectClasspath(jsapConfig.getString("classpath"));
-		config.setProjectSourcePath(jsapConfig.getStringArray("source"));
-		config.setProjectTests(jsapConfig.getStringArray("test"));
-		config.setComplianceLevel(jsapConfig.getInt("complianceLevel", 7));
-		config.setMaxTimeInMinutes(jsapConfig.getInt("maxTime", 10));
-		config.setMaxTimeEachTypeOfFixInMinutes(jsapConfig.getInt("maxTimeType", 5));
-		config.setLocalizer(strToLocalizer(jsapConfig.getString("faultLocalization")));
+
+		final URL[] classpath = JavaLibrary.classpathFrom(jsapConfig.getString("classpath"));
+
+		this.nopolContext = new NopolContext(sourceFiles, classpath, jsapConfig.getStringArray("test"));
+
+		nopolContext.setType(strToStatementType(jsapConfig.getString("type")));
+		nopolContext.setMode(strToMode(jsapConfig.getString("mode")));
+		nopolContext.setSynthesis(strToSynthesis(jsapConfig.getString("synthesis")));
+		nopolContext.setOracle(strToOracle(jsapConfig.getString("oracle")));
+		nopolContext.setSolver(strToSolver(jsapConfig.getString("solver")));
+		if (jsapConfig.getString("solverPath") != null) {
+			nopolContext.setSolverPath(jsapConfig.getString("solverPath"));
+			SolverFactory.setSolver(nopolContext.getSolver(), nopolContext.getSolverPath());
+		}
+		nopolContext.setComplianceLevel(jsapConfig.getInt("complianceLevel", nopolContext.getComplianceLevel())); 
+		nopolContext.setMaxTimeInMinutes(jsapConfig.getInt("maxTime", nopolContext.getMaxTimeInMinutes()));
+		nopolContext.setMaxTimeEachTypeOfFixInMinutes(jsapConfig.getLong("maxTimeType",nopolContext.getMaxTimeEachTypeOfFixInMinutes()));
+
+		nopolContext.setLocalizer(strToLocalizer(jsapConfig.getString("faultLocalization")));
+		nopolContext.setOutputFolder(jsapConfig.getString("outputFolder"));
+		nopolContext.setJson(jsapConfig.getBoolean("outputJson", false));
 		return true;
 	}
 
-	private static Config.NopolSynthesis strToSynthesis(String str) {
+	private static NopolContext.NopolSynthesis strToSynthesis(String str) {
 		if (str.equals("smt")) {
-			return Config.NopolSynthesis.SMT;
+			return NopolContext.NopolSynthesis.SMT;
 		} else if (str.equals("dynamoth")) {
-			return Config.NopolSynthesis.DYNAMOTH;
+			return NopolContext.NopolSynthesis.DYNAMOTH;
 		}
 		throw new RuntimeException("Unknow Nopol oracle " + str);
 	}
 
-	private static Config.NopolOracle strToOracle(String str) {
+	private static NopolContext.NopolOracle strToOracle(String str) {
 		if (str.equals("angelic")) {
-			return Config.NopolOracle.ANGELIC;
+			return NopolContext.NopolOracle.ANGELIC;
 		} else if (str.equals("symbolic")) {
-			return Config.NopolOracle.SYMBOLIC;
+			return NopolContext.NopolOracle.SYMBOLIC;
 		}
 		throw new RuntimeException("Unknow Nopol oracle " + str);
 	}
 
-	private static Config.NopolSolver strToSolver(String str) {
+	private static NopolContext.NopolSolver strToSolver(String str) {
 		if (str.equals("z3")) {
-			return Config.NopolSolver.Z3;
+			return NopolContext.NopolSolver.Z3;
 		} else if (str.equals("cvc4")) {
-			return Config.NopolSolver.CVC4;
+			return NopolContext.NopolSolver.CVC4;
 		}
 		throw new RuntimeException("Unknow Nopol solver " + str);
 	}
 
-	private static Config.NopolMode strToMode(String str) {
+	private static NopolContext.NopolMode strToMode(String str) {
 		if (str.equals("repair")) {
-			return Config.NopolMode.REPAIR;
+			return NopolContext.NopolMode.REPAIR;
 		} else if (str.equals("ranking")) {
-			return Config.NopolMode.RANKING;
+			return NopolContext.NopolMode.RANKING;
 		}
 		throw new RuntimeException("Unknow Nopol mode " + str);
 	}
 
-	private static StatementType strToStatementType(String str) {
+	private static RepairType strToStatementType(String str) {
 		if (str.equals("pre_then_cond")) {
-			return StatementType.PRE_THEN_COND;
+			return RepairType.PRE_THEN_COND;
 		} else if (str.equals("loop")) {
-			return StatementType.LOOP;
+			return RepairType.LOOP;
 		} else if (str.equals("condition")) {
-			return StatementType.CONDITIONAL;
+			return RepairType.CONDITIONAL;
 		} else if (str.equals("precondition")) {
-			return StatementType.PRECONDITION;
+			return RepairType.PRECONDITION;
 		} else if (str.equals("arithmetic")) {
-			return StatementType.INTEGER_LITERAL;
+			return RepairType.INTEGER_LITERAL;
 		}
-		return StatementType.NONE;
+		return RepairType.NONE;
 	}
 
-	private static Config.NopolLocalizer strToLocalizer(String str) {
+	private static NopolContext.NopolLocalizer strToLocalizer(String str) {
 		if (str.equals("gzoltar")) {
-			return Config.NopolLocalizer.GZOLTAR;
+			return NopolContext.NopolLocalizer.GZOLTAR;
 		} else if (str.equals("dumb")) {
-			return Config.NopolLocalizer.DUMB;
+			return NopolContext.NopolLocalizer.DUMB;
 		} else
-			return Config.NopolLocalizer.OCHIAI;
+			return NopolContext.NopolLocalizer.COCOSPOON;
 	}
 
-	private static void initJSAP() throws JSAPException {
+	private void initJSAP() throws JSAPException {
 		FlaggedOption modeOpt = new FlaggedOption("mode");
 		modeOpt.setRequired(false);
 		modeOpt.setAllowMultipleDeclarations(false);
@@ -218,14 +254,14 @@ public class Main {
 		jsap.registerParameter(modeOpt);
 
 		FlaggedOption typeOpt = new FlaggedOption("type");
-		typeOpt.setRequired(false);
+		typeOpt.setRequired(true);
 		typeOpt.setAllowMultipleDeclarations(false);
 		typeOpt.setLongFlag("type");
 		typeOpt.setShortFlag('e');
-		typeOpt.setUsageName("pre_then_cond|loop|condition|precondition|arithmetic");
+		typeOpt.setUsageName("condition|precondition|pre_then_cond|loop|arithmetic");
 		typeOpt.setStringParser(JSAP.STRING_PARSER);
-		typeOpt.setDefault("pre_then_cond");
-		typeOpt.setHelp("The type of statement to analyze (only used with repair mode).");
+		typeOpt.setDefault("condition");
+		typeOpt.setHelp("The repair type (example fixing only conditions, or adding precondition). REQUIRED OPTION");
 		jsap.registerParameter(typeOpt);
 
 		FlaggedOption oracleOpt = new FlaggedOption("oracle");
@@ -296,7 +332,7 @@ public class Main {
 		testOpt.setShortFlag('t');
 		testOpt.setList(true);
 		testOpt.setStringParser(JSAP.STRING_PARSER);
-		testOpt.setHelp("Define the tests of the project.");
+		testOpt.setHelp("Define the tests of the project (both failing and passing), fully-qualified, separated with ':' (even if the classpath contains other tests, only those are considered.");
 		jsap.registerParameter(testOpt);
 
 		FlaggedOption complianceLevelOpt = new FlaggedOption("complianceLevel");
@@ -313,7 +349,6 @@ public class Main {
 		maxTime.setAllowMultipleDeclarations(false);
 		maxTime.setLongFlag("maxTime");
 		maxTime.setStringParser(JSAP.INTEGER_PARSER);
-		maxTime.setDefault("10");
 		maxTime.setHelp("The maximum time execution in minute for the whole execution of Nopol.(default: 10)");
 		jsap.registerParameter(maxTime);
 
@@ -322,7 +357,6 @@ public class Main {
 		maxTimeByTypeInMinutes.setAllowMultipleDeclarations(false);
 		maxTimeByTypeInMinutes.setLongFlag("maxTimeType");
 		maxTimeByTypeInMinutes.setStringParser(JSAP.INTEGER_PARSER);
-		maxTimeByTypeInMinutes.setDefault("5");
 		maxTimeByTypeInMinutes.setHelp("The maximum time execution in minute for one type of patch. (default: 5)");
 		jsap.registerParameter(maxTimeByTypeInMinutes);
 
@@ -331,10 +365,28 @@ public class Main {
 		faultLocalization.setAllowMultipleDeclarations(false);
 		faultLocalization.setLongFlag("flocal");
 		faultLocalization.setShortFlag('z');
-		faultLocalization.setUsageName(" ochiai|dumb|gzoltar");//TODO ADD PARAMETIZED FAULT LOCALIZER
+		faultLocalization.setUsageName(" cocospoon|dumb|gzoltar");//TODO ADD PARAMETIZED FAULT LOCALIZER
 		faultLocalization.setStringParser(JSAP.STRING_PARSER);
-		faultLocalization.setDefault("ochiai");
+		faultLocalization.setDefault(NopolContext.DEFAULT_FAULT_LOCALIZER.name().toLowerCase());
 		faultLocalization.setHelp("Define the fault localizer to be used.");
 		jsap.registerParameter(faultLocalization);
+
+
+		FlaggedOption outputFolder = new FlaggedOption("outputFolder");
+		outputFolder.setRequired(false);
+		outputFolder.setAllowMultipleDeclarations(false);
+		outputFolder.setLongFlag("output");
+		outputFolder.setStringParser(JSAP.STRING_PARSER);
+		outputFolder.setDefault(".");
+		outputFolder.setHelp("Define the location where the patches will be saved.");
+		jsap.registerParameter(outputFolder);
+
+		QualifiedSwitch outputJson = new QualifiedSwitch("outputJson");
+		outputJson.setRequired(false);
+		outputJson.setAllowMultipleDeclarations(false);
+		outputJson.setLongFlag("json");
+		outputJson.setStringParser(JSAP.STRING_PARSER);
+		outputJson.setHelp("Output a json file in the current working directory.");
+		jsap.registerParameter(outputJson);
 	}
 }

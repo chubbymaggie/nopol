@@ -1,31 +1,25 @@
 package fr.inria.lille.repair.nopol.spoon;
 
-import fr.inria.lille.repair.common.synth.StatementType;
+import fr.inria.lille.repair.common.synth.RepairType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import spoon.processing.AbstractProcessor;
 import spoon.reflect.code.CtStatement;
-import xxl.java.library.FileLibrary;
+import spoon.reflect.cu.position.NoSourcePosition;
 
 public abstract class NopolProcessor extends AbstractProcessor<CtStatement> {
 
-    public NopolProcessor(CtStatement target, StatementType type) {
+    public NopolProcessor(CtStatement target, RepairType type) {
         this.target = target;
-        this.statementType = type;
+        this.repairType = type;
     }
 
     @Override
     public boolean isToBeProcessed(CtStatement statement) {
-        if (statement.getPosition() != null) {
-
-            return (statement.getPosition().getLine() == this.target
-                    .getPosition().getLine())
-                    && (statement.getPosition().getColumn() == this.target
-                    .getPosition().getColumn())
-                    && (FileLibrary.isSameFile(this.target.getPosition()
-                    .getFile(), statement.getPosition().getFile()));
+        if (statement.getPosition() instanceof NoSourcePosition || target.getPosition() instanceof NoSourcePosition) {
+            return false;
         }
-        return false;
+        return target.getPosition().getSourceStart() == statement.getPosition().getSourceStart() && target.getPosition().getSourceEnd() == statement.getPosition().getSourceEnd() && statement.equals(target);
     }
 
     public String getValue() {
@@ -56,11 +50,11 @@ public abstract class NopolProcessor extends AbstractProcessor<CtStatement> {
         return target;
     }
 
-    public StatementType getStatementType() {
-        return statementType;
+    public RepairType getRepairType() {
+        return repairType;
     }
 
-    private StatementType statementType;
+    private RepairType repairType;
 
     private Class<?> type;
     private String defaultValue;

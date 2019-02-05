@@ -21,12 +21,24 @@ import com.gzoltar.core.components.count.ComponentCount;
 import com.gzoltar.core.instr.testing.TestResult;
 import fr.inria.lille.localization.metric.Metric;
 import fr.inria.lille.localization.metric.Ochiai;
+import fr.inria.lille.repair.common.config.NopolContext;
 import fr.inria.lille.repair.nopol.SourceLocation;
+import gov.nasa.jpf.tool.Run;
 import xxl.java.junit.TestCase;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.net.URL;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.BitSet;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
@@ -37,16 +49,27 @@ import static com.google.common.base.Preconditions.checkNotNull;
  */
 public final class GZoltarFaultLocalizer extends GZoltar implements FaultLocalizer {
 
+	private static final String dir = System.getProperty("user.dir");
 	private Metric metric;
 
 	private List<StatementExt> statements;
 
-	public GZoltarFaultLocalizer(final URL[] classpath, String[] test) throws IOException {
-		this(classpath, checkNotNull(Arrays.asList("")), test, new Ochiai());
+	// encapsulates the try/catcch forced by gzoltar
+	public static GZoltarFaultLocalizer createInstance(NopolContext nopolContext) {
+		try {
+			return new GZoltarFaultLocalizer(nopolContext);
+		} catch (IOException e) {
+			throw new RuntimeException(e);
+		}
 	}
 
-	public GZoltarFaultLocalizer(final URL[] classpath, Collection<String> packageNames, String[] test, Metric metric) throws IOException {
-		super(System.getProperty("user.dir"));
+	/** uses {@link #createInstance(NopolContext)} */
+	private GZoltarFaultLocalizer(NopolContext nopolContext) throws IOException {
+		this(nopolContext.getProjectClasspath(), checkNotNull(Arrays.asList("")), nopolContext.getProjectTests(), new Ochiai());
+	}
+
+	private GZoltarFaultLocalizer(final URL[] classpath, Collection<String> packageNames, String[] test, Metric metric) throws IOException {
+		super(dir);
 		this.metric = metric;
 		ArrayList<String> classpaths = new ArrayList<>();
 		for (URL url : classpath) {
@@ -60,8 +83,10 @@ public final class GZoltarFaultLocalizer extends GZoltar implements FaultLocaliz
 		this.setClassPaths(classpaths);
 		this.addPackageNotToInstrument("org.junit");
 		this.addPackageNotToInstrument("junit.framework");
+		this.addPackageNotToInstrument("org.easymock");
 		this.addTestPackageNotToExecute("junit.framework");
 		this.addTestPackageNotToExecute("org.junit");
+		this.addTestPackageNotToExecute("org.easymock");
 		for (String packageName : packageNames) {
 			this.addPackageToInstrument(packageName);
 		}
@@ -69,14 +94,12 @@ public final class GZoltarFaultLocalizer extends GZoltar implements FaultLocaliz
 		this.statements = run(test);
 	}
 
-	public List<AbstractStatement> getStatements() {
-		List<AbstractStatement> abstractStatements = new ArrayList<>();
-		for (StatementExt statement : this.statements) {
-			abstractStatements.add(statement);
-		}
-		return abstractStatements;
+	@Override
+	public List<? extends StatementSourceLocation> getStatements() {
+		return this.statements;
 	}
 
+	@Override
 	public List<com.gzoltar.core.instr.testing.TestResult> getTestResults() {
 		return super.getTestResults();
 	}
@@ -84,16 +107,23 @@ public final class GZoltarFaultLocalizer extends GZoltar implements FaultLocaliz
 	@Override
 	public Map<SourceLocation, List<fr.inria.lille.localization.TestResult>> getTestListPerStatement() {
 		Map<SourceLocation, List<fr.inria.lille.localization.TestResult>> results = new HashMap<>();
-		for (com.gzoltar.core.instr.testing.TestResult testResult : this.getTestResults()) {
+		List<TestResult> testResults = this.getTestResults();
+
+		for (int j = 0; j < testResults.size(); j++) {
+			TestResult testResult = testResults.get(j);
+			TestResultImpl test = new TestResultImpl(TestCase.from(testResult.getName()), testResult.wasSuccessful());
+
 			List<ComponentCount> components = testResult.getCoveredComponents();
-			for (ComponentCount component1 : components) {
+			for (int i = 0; i < components.size(); i++) {
+				ComponentCount component1 = components.get(i);
 				Statement component = (Statement) component1.getComponent();
 				String containingClass = component.getMethod().getParent().getLabel();
+
 				SourceLocation sourceLocation = new SourceLocation(containingClass, component.getLineNumber());
 				if (!results.containsKey(sourceLocation)) {
 					results.put(sourceLocation, new ArrayList<fr.inria.lille.localization.TestResult>());
 				}
-				results.get(sourceLocation).add(new TestResultImpl(TestCase.from(testResult.getName()), testResult.wasSuccessful()));
+				results.get(sourceLocation).add(test);
 			}
 		}
 
@@ -116,9 +146,37 @@ public final class GZoltarFaultLocalizer extends GZoltar implements FaultLocaliz
 			this.addClassNotToInstrument(className); // we don't want to include the test as root-cause
 			// candidate
 		}
-		this.run();
+		final String systemClasspath = System.getProperty("java.class.path");
+
+		// remove classpath noise
+		String[] deps = systemClasspath.split(":");
+		StringBuilder cl = new StringBuilder();
+		for (int i = 0; i < deps.length; i++) {
+			String dep = deps[i];
+			if (dep.contains("jre") || dep.contains("gzoltar") || dep.contains("nopol")) {
+				cl.append(dep).append(":");
+			}
+		}
+		try {
+			System.setProperty("java.class.path", cl.toString());
+			setGzoltarDebug(false);
+			this.run();
+		} finally {
+			System.setProperty("java.class.path", systemClasspath);
+		}
 		return this.getSuspiciousStatements(this.metric);
 	}
+
+	protected void setGzoltarDebug(boolean debugValue) {
+		try {
+			Field debug = com.gzoltar.core.agent.Launcher.class.getDeclaredField("debug");
+			debug.setAccessible(true);
+			debug.setBoolean(null, debugValue);
+		} catch (NoSuchFieldException | IllegalAccessException e) {
+			e.printStackTrace();
+		}
+	}
+
 
 	private List<StatementExt> getSuspiciousStatements(final Metric metric) {
 		List<Statement> suspiciousStatements = super.getSuspiciousStatements();
@@ -149,7 +207,7 @@ public final class GZoltarFaultLocalizer extends GZoltar implements FaultLocaliz
 				}
 				nextTest = coverage.nextSetBit(nextTest + 1);
 			}
-			StatementExt s = new StatementExt(this.metric, statement);
+			StatementExt s = new StatementExt(metric, statement);
 			s.setEf(executedAndFailedCount);
 			s.setEp(executedAndPassedCount);
 			s.setNp(successfulTests - executedAndPassedCount);

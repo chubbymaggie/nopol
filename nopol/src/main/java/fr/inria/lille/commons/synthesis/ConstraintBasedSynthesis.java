@@ -19,6 +19,7 @@ import xxl.java.library.ClassLibrary;
 
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 
@@ -83,7 +84,7 @@ public class ConstraintBasedSynthesis {
     }
 
     private <T> Collection<Map<String, Object>> synthesisInputValues(Collection<Specification<T>> specifications, Expression<?> outputExpression) {
-        logCollection(logger(), "Specifications:", specifications);
+        // logCollection(logger(), "Specifications:", new LinkedList<>(specifications).subList(0, Math.max(Math.min(20, specifications.size()-1), specifications.size()-1)));
         Collection<Map<String, Object>> synthesisInputs = MetaList.newLinkedList();
         for (Specification<T> specification : specifications) {
             Map<String, Object> newMap = specification.inputs();
@@ -163,7 +164,7 @@ public class ConstraintBasedSynthesis {
 
     protected Map<String, Integer> satisfyingSolution(LocationVariableContainer container, Collection<Map<String, Object>> synthesisInputs) {
         IScript smtScript = scriptBuilder().scriptFrom(logic(), container, synthesisInputs);
-        logCollection(logger(), "SMTLib Script:", smtScript.commands());
+        //logCollection(logger(), "SMTLib Script:", smtScript.commands());
         Map<String, String> satisfyingValues = scriptSolution(container, smtScript);
         Map<String, Integer> toInteger = MetaMap.valuesParsedAsInteger(satisfyingValues);
         return toInteger;

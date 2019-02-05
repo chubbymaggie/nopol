@@ -15,15 +15,13 @@
  */
 package fr.inria.lille.repair.nopol.synth;
 
-
 import fr.inria.lille.commons.spoon.SpoonedClass;
 import fr.inria.lille.commons.spoon.SpoonedProject;
 import fr.inria.lille.commons.trace.RuntimeValues;
 import fr.inria.lille.commons.trace.Specification;
 import fr.inria.lille.commons.trace.SpecificationTestCasesListener;
 import fr.inria.lille.localization.TestResult;
-import fr.inria.lille.repair.common.config.Config;
-import fr.inria.lille.repair.nopol.NoPolLauncher;
+import fr.inria.lille.repair.common.config.NopolContext;
 import fr.inria.lille.repair.nopol.SourceLocation;
 import org.junit.runner.Description;
 import org.junit.runner.Result;
@@ -33,27 +31,29 @@ import spoon.processing.Processor;
 import xxl.java.compiler.DynamicCompilationException;
 import xxl.java.junit.CompoundResult;
 import xxl.java.junit.TestCase;
+import xxl.java.junit.TestCasesListener;
 import xxl.java.junit.TestSuiteExecution;
 
 import java.net.URL;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 
 /**
  * @author Favio D. DeMarco
  */
-public final class ConstraintModelBuilder implements AngelicValue<Boolean> {
+public final class ConstraintModelBuilder implements InstrumentedProgram<Boolean> {
 
     private final Logger logger = LoggerFactory.getLogger(this.getClass());
-    private boolean viablePatch;
     private final ClassLoader classLoader;
     private RuntimeValues<Boolean> runtimeValues;
     private SourceLocation sourceLocation;
-    private Config config;
+    private NopolContext nopolContext;
 
-    public ConstraintModelBuilder(RuntimeValues<Boolean> runtimeValues, SourceLocation sourceLocation, Processor<?> processor, SpoonedProject spooner, Config config) {
+    public ConstraintModelBuilder(RuntimeValues<Boolean> runtimeValues, SourceLocation sourceLocation, Processor<?> processor, SpoonedProject spooner, NopolContext nopolContext) {
         this.sourceLocation = sourceLocation;
-        this.config = config;
+        this.nopolContext = nopolContext;
         String qualifiedName = sourceLocation.getRootClassName();
         SpoonedClass fork = spooner.forked(qualifiedName);
         try {
@@ -65,58 +65,104 @@ public final class ConstraintModelBuilder implements AngelicValue<Boolean> {
         this.runtimeValues = runtimeValues;
     }
 
-    @Override
-    public Collection<Specification<Boolean>> buildFor(URL[] classpath, String[] testClasses, Collection<TestCase> failures) {
-        return null;
-    }
-
     /**
-     * @see fr.inria.lille.repair.nopol.synth.ConstraintModelBuilder#buildFor(URL[], List, Collection)
+     * @see InstrumentedProgram#collectSpecifications(URL[], List, Collection)
      */
-    public Collection<Specification<Boolean>> buildFor(URL[] classpath, List<TestResult> testClasses, Collection<TestCase> failures) {
-        int nbFailingTestExecution = 0;
-        int nbPassedTestExecution = 0;
-        SpecificationTestCasesListener<Boolean> listener = new SpecificationTestCasesListener<>(runtimeValues);
+    public Collection<Specification<Boolean>> collectSpecifications(URL[] classpath, List<TestResult> testClasses, Collection<TestCase> failures) {
+        SpecificationTestCasesListener<Boolean> listenerFalse = new SpecificationTestCasesListener<>(runtimeValues);
         AngelicExecution.enable();
-        CompoundResult firstResult = TestSuiteExecution.runTestCases(failures, classLoader, listener, config);
-        nbFailingTestExecution += listener.numberOfFailedTests();
-        nbPassedTestExecution += listener.numberOfTests() - listener.numberOfFailedTests();
-        AngelicExecution.flip();
-        CompoundResult secondResult = TestSuiteExecution.runTestCases(failures, classLoader, listener, config);
-        nbFailingTestExecution += listener.numberOfFailedTests();
-        nbPassedTestExecution += listener.numberOfTests() - listener.numberOfFailedTests();
+
+        // the instrumented condition now evaluates to "true"!
+        AngelicExecution.setBooleanValue(false);
+        CompoundResult firstResult = TestSuiteExecution.runTestCases(failures, classLoader, listenerFalse, nopolContext);
+
+        // the instrumented condition now evaluates to "false"!
+        AngelicExecution.setBooleanValue(true);
+        SpecificationTestCasesListener<Boolean> listenerTrue = new SpecificationTestCasesListener<>(runtimeValues);
+        CompoundResult secondResult = TestSuiteExecution.runTestCases(failures, classLoader, listenerTrue, nopolContext);
+
+        // come back to default mode
         AngelicExecution.disable();
-        if (determineViability(firstResult, secondResult)) {
-            /* to collect information for passing tests */
-            TestSuiteExecution.runTestResult(testClasses, classLoader, listener, config);
-            nbFailingTestExecution += listener.numberOfFailedTests();
-            nbPassedTestExecution += listener.numberOfTests() - listener.numberOfFailedTests();
+
+        if (!isSynthesisPossible(firstResult, secondResult)) {
+            return Collections.emptyList();
         }
-        NoPolLauncher.nbFailingTestExecution.add(nbFailingTestExecution);
-        NoPolLauncher.nbPassedTestExecution.add(nbPassedTestExecution);
-        return listener.specifications();
+        /* to collect information for passing tests */
+        class PassingListener extends TestCasesListener {
+            @Override
+            public void testRunStarted(Description description)
+                    throws Exception {
+            }
+        }
+        // now we look for the tests that are oblivious to this condition
+        // this enables us to have less constraints, hence to relax the satisfaction problem
+        PassingListener passingListenerWithFalse = new PassingListener();
+        AngelicExecution.enable();
+        AngelicExecution.setBooleanValue(false);
+        TestSuiteExecution.runTestResult(testClasses, classLoader, passingListenerWithFalse, nopolContext);
+
+        AngelicExecution.setBooleanValue(true);
+        PassingListener passingListenerWithTrue  = new PassingListener();
+        TestSuiteExecution.runTestResult(testClasses, classLoader, passingListenerWithTrue, nopolContext);
+
+        AngelicExecution.disable();
+        ArrayList<TestResult> tmp = new ArrayList<>();
+        // removes all tests that are not dependent of the condition
+        for (int i = 0; i < testClasses.size(); i++) {
+            TestResult testResult = testClasses.get(i);
+            TestCase testCase = testResult.getTestCase();
+            boolean isOblivious = passingListenerWithTrue.successfulTests().contains(testCase) && passingListenerWithFalse.successfulTests().contains(testCase);
+            if (!isOblivious && !failures.contains(testCase)) {
+                tmp.add(testResult);
+            }
+        }
+
+        SpecificationTestCasesListener<Boolean> listenerPassing = new SpecificationTestCasesListener<>(runtimeValues);
+
+        TestSuiteExecution.runTestResult(tmp, classLoader, listenerPassing, nopolContext);
+
+
+        // constructing the final set of constraints
+        List<Specification<Boolean>> finalSpec = new ArrayList<>();
+
+        // we first add the specs for the failing tests that pass with "false"
+        finalSpec.addAll(listenerFalse.specificationsForAllTests());
+        // we then add the specs for the failing tests that pass with "true"
+        finalSpec.addAll(listenerTrue.specificationsForAllTests());
+
+        // and then we add the specs for the passing non-oblvivious test cases
+        finalSpec.addAll(listenerPassing.specificationsForAllTests());
+
+        return finalSpec;
     }
 
-    private boolean determineViability(final Result firstResult, final Result secondResult) {
-        Collection<Description> firstFailures = TestSuiteExecution.collectDescription(firstResult.getFailures());
-        Collection<Description> secondFailures = TestSuiteExecution.collectDescription(secondResult.getFailures());
-        firstFailures.retainAll(secondFailures);
-        viablePatch = firstFailures.isEmpty();
-        int nbFirstSuccess = firstResult.getRunCount() - firstResult.getFailureCount();
-        int nbSecondSuccess = secondResult.getRunCount() - secondResult.getFailureCount();
-        if (!viablePatch || (nbFirstSuccess == 0 && nbSecondSuccess == 0)) {
-            logger.debug("Failing test(s): {}\n{}", sourceLocation, firstFailures);
+
+
+    private boolean isSynthesisPossible(final Result firstResultWithFalse, final Result secondResultWithTrue) {
+    	// this method is a key optimization in Nopol
+		// it enables to not start the synthesis when we are sure that it is not possible
+		// only based on the observed test outcomes with angelic values
+
+        Collection<Description> testFailuresWithFalse = TestSuiteExecution.collectDescription(firstResultWithFalse.getFailures());
+        Collection<Description> testFailuresWithTrue = TestSuiteExecution.collectDescription(secondResultWithTrue.getFailures());
+
+        // contract: all test failures must either in testFailuresWithFalse or in secondFailures
+		// removes from testFailuresWithFalse all of its elements that are not contained in testFailuresWithTrue
+		// consequently, it remains the elements that are always failing
+		Collection<Description> testsThatAreAlwasyFailing = new ArrayList<>(testFailuresWithFalse);
+		testsThatAreAlwasyFailing.retainAll(testFailuresWithTrue);
+
+        boolean synthesisIsPossible = testsThatAreAlwasyFailing.isEmpty();
+
+        // some logging
+        int nbFirstSuccess = firstResultWithFalse.getRunCount() - firstResultWithFalse.getFailureCount();
+        int nbSecondSuccess = secondResultWithTrue.getRunCount() - secondResultWithTrue.getFailureCount();
+        if (!synthesisIsPossible || (nbFirstSuccess == 0 && nbSecondSuccess == 0)) {
             Logger testsOutput = LoggerFactory.getLogger("tests.output");
-            testsOutput.debug("First set: \n{}", firstResult.getFailures());
-            testsOutput.debug("Second set: \n{}", secondResult.getFailures());
+            testsOutput.debug("Failing tests with false: \n{}", firstResultWithFalse.getFailures());
+            testsOutput.debug("Failing tests with true: \n{}", secondResultWithTrue.getFailures());
         }
-        return viablePatch;
+        return synthesisIsPossible;
     }
 
-    /**
-     * @see fr.inria.lille.repair.nopol.synth.ConstraintModelBuilder#isAViablePatch()
-     */
-    public boolean isAViablePatch() {
-        return viablePatch;
-    }
 }

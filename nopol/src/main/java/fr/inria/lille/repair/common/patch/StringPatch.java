@@ -15,8 +15,11 @@
  */
 package fr.inria.lille.repair.common.patch;
 
-import fr.inria.lille.repair.common.synth.StatementType;
+import fr.inria.lille.repair.common.config.NopolContext;
+import fr.inria.lille.repair.common.synth.RepairType;
 import fr.inria.lille.repair.nopol.SourceLocation;
+import fr.inria.lille.diff.PatchGenerator;
+import spoon.reflect.factory.Factory;
 
 import java.io.File;
 
@@ -28,21 +31,21 @@ public class StringPatch implements Patch {
     private static final long serialVersionUID = 1150517609100930111L;
     private final SourceLocation location;
     private final String repair;
-    private final StatementType type;
+    private final RepairType type;
 
     /**
      * @param repair
      * @param location
      * @param type
      */
-    public StringPatch(final String repair, final SourceLocation location, final StatementType type) {
+    public StringPatch(final String repair, final SourceLocation location, final RepairType type) {
         this.repair = repair;
         this.location = location;
         this.type = type;
     }
 
     /**
-     * @see fr.inria.lille.repair.nopol.patch.Patch#asString()
+     * @see Patch#asString()
      */
     @Override
     public String asString() {
@@ -58,7 +61,7 @@ public class StringPatch implements Patch {
     }
 
     /**
-     * @see fr.inria.lille.repair.nopol.patch.Patch#getFile()
+     * @see Patch#getFile(File)
      */
     @Override
     public File getFile(final File sourceFolder) {
@@ -66,7 +69,7 @@ public class StringPatch implements Patch {
     }
 
     /**
-     * @see fr.inria.lille.repair.nopol.patch.Patch#getLineNumber()
+     * @see Patch#getLineNumber()
      */
     @Override
     public int getLineNumber() {
@@ -74,13 +77,18 @@ public class StringPatch implements Patch {
     }
 
     @Override
-    public StatementType getType() {
+    public RepairType getType() {
         return type;
     }
 
     @Override
     public SourceLocation getSourceLocation() {
         return this.location;
+    }
+
+    @Override
+    public String toDiff(Factory spoon, NopolContext nopolContext) {
+        return new PatchGenerator(this, spoon, nopolContext).getPatch();
     }
 
     /**

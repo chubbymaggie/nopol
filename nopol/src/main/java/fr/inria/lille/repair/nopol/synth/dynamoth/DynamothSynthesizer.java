@@ -3,22 +3,21 @@ package fr.inria.lille.repair.nopol.synth.dynamoth;
 import fr.inria.lille.commons.spoon.SpoonedClass;
 import fr.inria.lille.commons.spoon.SpoonedProject;
 import fr.inria.lille.localization.TestResult;
-import fr.inria.lille.repair.common.config.Config;
+import fr.inria.lille.repair.common.config.NopolContext;
 import fr.inria.lille.repair.common.patch.ExpressionPatch;
 import fr.inria.lille.repair.common.patch.Patch;
-import fr.inria.lille.repair.common.synth.StatementType;
-import fr.inria.lille.repair.nopol.NoPolLauncher;
+import fr.inria.lille.repair.common.synth.RepairType;
+import fr.inria.lille.repair.nopol.NopolResult;
 import fr.inria.lille.repair.nopol.SourceLocation;
 import fr.inria.lille.repair.nopol.spoon.NopolProcessor;
 import fr.inria.lille.repair.nopol.spoon.dynamoth.ConditionalInstrumenter;
 import fr.inria.lille.repair.nopol.synth.AngelicExecution;
-import fr.inria.lille.repair.nopol.synth.AngelicValue;
 import fr.inria.lille.repair.nopol.synth.SMTNopolSynthesizer;
 import fr.inria.lille.repair.nopol.synth.Synthesizer;
-import fr.inria.lille.spirals.repair.commons.Candidates;
-import fr.inria.lille.spirals.repair.expression.Expression;
-import fr.inria.lille.spirals.repair.synthesis.DynamothCodeGenesis;
-import fr.inria.lille.spirals.repair.synthesis.DynamothCodeGenesisImpl;
+import fr.inria.lille.repair.common.Candidates;
+import fr.inria.lille.repair.expression.Expression;
+import fr.inria.lille.repair.synthesis.DynamothCodeGenesis;
+import fr.inria.lille.repair.synthesis.DynamothCodeGenesisImpl;
 import org.junit.runner.Description;
 import org.junit.runner.Result;
 import org.junit.runner.notification.Failure;
@@ -45,33 +44,24 @@ public class DynamothSynthesizer<T> implements Synthesizer {
 
     private final Logger testsOutput = LoggerFactory.getLogger(getClass().getName());
     private final NopolProcessor nopolProcessor;
-    private final StatementType type;
+    private final RepairType type;
     private final SourceLocation sourceLocation;
     private final SpoonedProject spooner;
     private final File[] sourceFolders;
-    private final AngelicValue angelicValue;
-    private final Config config;
+    private final NopolContext nopolContext;
 
-    public DynamothSynthesizer(AngelicValue angelicValue, File[] sourceFolders, SourceLocation sourceLocation, StatementType type, NopolProcessor processor, SpoonedProject spooner, Config config) {
+    public DynamothSynthesizer(File[] sourceFolders, SourceLocation sourceLocation, RepairType type, NopolProcessor processor, SpoonedProject spooner, NopolContext nopolContext) {
         this.sourceLocation = sourceLocation;
-        this.config = config;
+        this.nopolContext = nopolContext;
         this.type = type;
         this.nopolProcessor = processor;
         this.spooner = spooner;
         this.sourceFolders = sourceFolders;
-        this.angelicValue = angelicValue;
     }
 
     @Override
-    public List<Patch> buildPatch(URL[] classpath, List<TestResult> testClasses, Collection<TestCase> failures, long maxTimeBuildPatch) {
+    public List<Patch> findAngelicValuesAndBuildPatch(URL[] classpath, List<TestResult> testClasses, Collection<TestCase> failures, long maxTimeBuildPatch, NopolResult nopolResult) {
         long startTime = System.currentTimeMillis();
-        /*Collection<Specification<T>> collection = angelicValue.buildFor(classpath, testClasses, failures);
-
-        for (Iterator<Specification<T>> iterator = collection.iterator(); iterator.hasNext(); ) {
-            Specification<T> next = iterator.next();
-            next.inputs();
-        }*/
-		NoPolLauncher.nbFailingTestExecution.add(failures.size());
         Processor<CtStatement> processor = new ConditionalInstrumenter(nopolProcessor, type.getType());
         SpoonedClass fork = spooner.forked(sourceLocation.getContainingClassName());
         ClassLoader classLoader;
@@ -86,7 +76,7 @@ public class DynamothSynthesizer<T> implements Synthesizer {
         AngelicExecution.enable();
         AngelicExecution.setBooleanValue(false);
         TestRunListener testCasesListener = new TestRunListener();
-        CompoundResult firstResult = TestSuiteExecution.runTestCases(failures, classLoader, testCasesListener, config);
+        CompoundResult firstResult = TestSuiteExecution.runTestCases(failures, classLoader, testCasesListener, nopolContext);
         Map<String, List<T>> passedTests = testCasesListener.passedTests;
         for (Iterator<String> iterator = passedTests.keySet().iterator(); iterator.hasNext(); ) {
             String next = iterator.next();
@@ -95,7 +85,7 @@ public class DynamothSynthesizer<T> implements Synthesizer {
         AngelicExecution.flip();
 
         testCasesListener = new TestRunListener();
-        CompoundResult secondResult = TestSuiteExecution.runTestCases(failures, classLoader, testCasesListener, config);
+        CompoundResult secondResult = TestSuiteExecution.runTestCases(failures, classLoader, testCasesListener, nopolContext);
         AngelicExecution.disable();
         passedTests = testCasesListener.passedTests;
         for (Iterator<String> iterator = passedTests.keySet().iterator(); iterator.hasNext(); ) {
@@ -106,7 +96,7 @@ public class DynamothSynthesizer<T> implements Synthesizer {
             SMTNopolSynthesizer.nbStatementsWithAngelicValue++;
             testCasesListener = new TestRunListener();
             AngelicExecution.disable();
-            TestSuiteExecution.runTestResult(testClasses, classLoader, testCasesListener, config);
+            TestSuiteExecution.runTestResult(testClasses, classLoader, testCasesListener, nopolContext);
             passedTests = testCasesListener.passedTests;
             for (String next : passedTests.keySet()) {
                 Object[] values = passedTests.get(next).toArray();
@@ -129,7 +119,7 @@ public class DynamothSynthesizer<T> implements Synthesizer {
                     AngelicExecution.setBooleanValue(flippedValue);
                     testCasesListener = new TestRunListener();
                     try {
-                        Result result = TestSuiteExecution.runTest(next, classLoader, testCasesListener, config);
+                        Result result = TestSuiteExecution.runTest(next, classLoader, testCasesListener, nopolContext);
                         if (!result.wasSuccessful()) {
                             oracle.put(next, values);
                         } else {
@@ -148,7 +138,7 @@ public class DynamothSynthesizer<T> implements Synthesizer {
             this.sourceLocation.setSourceStart(position.getSourceStart());
             this.sourceLocation.setSourceEnd(position.getSourceEnd());
 
-            DynamothCodeGenesis synthesizer = new DynamothCodeGenesisImpl(spooner, sourceFolders, sourceLocation, classpath, oracle, oracle.keySet().toArray(new String[0]), config);
+            DynamothCodeGenesis synthesizer = new DynamothCodeGenesisImpl(spooner, sourceFolders, sourceLocation, classpath, oracle, oracle.keySet().toArray(new String[0]), nopolContext);
             Candidates run = synthesizer.run(remainingTime);
             if (run.size() > 0) {
                 List<Patch> patches = new ArrayList<>();

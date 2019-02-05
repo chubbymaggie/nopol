@@ -1,10 +1,11 @@
 package fr.inria.lille.commons.spoon;
 
 import fr.inria.lille.commons.spoon.util.SpoonModelLibrary;
-import fr.inria.lille.repair.common.config.Config;
+import fr.inria.lille.repair.common.config.NopolContext;
 import org.apache.log4j.Level;
 import org.slf4j.Logger;
 import spoon.compiler.Environment;
+import spoon.processing.ProcessInterruption;
 import spoon.processing.ProcessingManager;
 import spoon.processing.Processor;
 import spoon.reflect.declaration.CtPackage;
@@ -14,7 +15,6 @@ import spoon.reflect.factory.TypeFactory;
 import spoon.reflect.visitor.DefaultJavaPrettyPrinter;
 import spoon.support.JavaOutputProcessor;
 import spoon.support.RuntimeProcessingManager;
-import spoon.support.StandardEnvironment;
 import xxl.java.compiler.BytecodeClassLoader;
 import xxl.java.compiler.BytecodeClassLoaderBuilder;
 import xxl.java.compiler.DynamicClassCompiler;
@@ -37,28 +37,43 @@ import static xxl.java.library.LoggerLibrary.loggerFor;
 
 public abstract class SpoonedFile {
 
-    protected final Config config;
+    private File[] sourceFiles;
+    private URL[] projectClasspath;
+    private URL[] compilationClasspath;
+    private Factory factory;
+    private ProcessingManager manager;
+    private DynamicClassCompiler compiler;
+    private Map<String, byte[]> compiledClasses;
+    private DefaultJavaPrettyPrinter prettyPrinter;
 
-    protected abstract Collection<? extends CtType<?>> modelledClasses();
+    protected final NopolContext nopolContext;
 
-    public SpoonedFile(File[] sourceFiles, URL[] projectClasspath, Config config) {
-        //logDebug(logger(), format("[Building Spoon model from %s]", sourceFiles));
-        this.config = config;
+    public SpoonedFile(File[] sourceFiles, NopolContext nopolContext) {
+        this.nopolContext = nopolContext;
         this.sourceFiles = sourceFiles;
-        this.projectClasspath = projectClasspath;
+        this.projectClasspath = nopolContext.getProjectClasspath();
+
         factory = SpoonModelLibrary.newFactory();
-        factory.getEnvironment().setComplianceLevel(config.getComplianceLevel());
-        factory.getEnvironment().setGenerateJavadoc(false);
+        factory.getEnvironment().setComplianceLevel(nopolContext.getComplianceLevel());
+        factory.getEnvironment().setCommentEnabled(false);
         factory.getEnvironment().setLevel(Level.OFF.toString());
+
         factory = SpoonModelLibrary.modelFor(factory, sourceFiles, projectClasspath());
-        compiler = new DynamicClassCompiler(compilationClasspath(), config);
-        manager = new RuntimeProcessingManager(spoonFactory());
+
+        compiler = new DynamicClassCompiler(compilationClasspath(), nopolContext.getComplianceLevel());
+        manager = new RuntimeProcessingManager(factory);
         compiledClasses = MetaMap.newHashMap();
         prettyPrinter = new DefaultJavaPrettyPrinter(spoonEnvironment());
     }
 
+    protected abstract Collection<? extends CtType<?>> modelledClasses();
+
     public void generateOutputFile(File destinationFolder) {
-        Processor<?> writer = new JavaOutputProcessor(destinationFolder, new DefaultJavaPrettyPrinter(new StandardEnvironment()));
+        Environment env = factory.getEnvironment();
+        env.setSourceOutputDirectory(destinationFolder);
+        JavaOutputProcessor javaOutputProcessor = new JavaOutputProcessor(prettyPrinter);
+        javaOutputProcessor.setFactory(factory);
+        Processor<?> writer = javaOutputProcessor;
         process(writer);
     }
 
@@ -111,6 +126,8 @@ public abstract class SpoonedFile {
     }
 
     public ClassLoader dumpedToClassLoader() {
+        // compile and load in class loader
+        compileModelledClasses(modelledClasses());
         return newBytecodeClassloader(compiledClasses());
     }
 
@@ -120,7 +137,7 @@ public abstract class SpoonedFile {
 
     public ClassLoader processedAndDumpedToClassLoader(Collection<? extends Processor<?>> processors) {
         process(processors);
-        return newBytecodeClassloader(compiledClasses());
+        return dumpedToClassLoader();
     }
 
     public void process(Processor<?> processor) {
@@ -136,9 +153,12 @@ public abstract class SpoonedFile {
         for (CtType<?> modelledClass : modelledClasses) {
             String qualifiedName = modelledClass.getQualifiedName();
             //logDebug(logger(), format("[Spoon processing of %s]", qualifiedName));
-            processingManager().process(modelledClass);
+            try {
+                processingManager().process(modelledClass);
+            } catch (ProcessInterruption e) {
+                continue;
+            }
         }
-        compileModelledClasses(modelledClasses);
     }
 
     private void setProcessors(Collection<? extends Processor<?>> processors) {
@@ -162,9 +182,12 @@ public abstract class SpoonedFile {
     protected synchronized String sourceForModelledClass(CtType<?> modelledClass) {
         //logDebug(logger(), format("[Scanning source code of %s]", modelledClass.getQualifiedName()));
         prettyPrinter().scan(modelledClass);
-        String packageDeclaration = "package " + modelledClass.getPackage().getQualifiedName() + ";";
+        String packageDeclaration = "";
+        if (!modelledClass.getPackage().isUnnamedPackage()) {
+            packageDeclaration = "package " + modelledClass.getPackage().getQualifiedName() + ";";
+        }
         String sourceCode = packageDeclaration + JavaLibrary.lineSeparator() + prettyPrinter().toString();
-        prettyPrinter().reset();
+        prettyPrinter = new DefaultJavaPrettyPrinter(spoonEnvironment());
         return sourceCode;
     }
 
@@ -237,13 +260,4 @@ public abstract class SpoonedFile {
     private Logger logger() {
         return loggerFor(this);
     }
-
-    private File[] sourceFiles;
-    private URL[] projectClasspath;
-    private URL[] compilationClasspath;
-    private Factory factory;
-    private ProcessingManager manager;
-    private DynamicClassCompiler compiler;
-    private Map<String, byte[]> compiledClasses;
-    private DefaultJavaPrettyPrinter prettyPrinter;
 }

@@ -3,11 +3,11 @@ package actor;
 import akka.actor.ActorRef;
 import akka.actor.UntypedActor;
 import com.google.common.io.Files;
-import fr.inria.lille.repair.common.config.Config;
+import fr.inria.lille.repair.common.config.NopolContext;
 import fr.inria.lille.repair.common.patch.Patch;
-import fr.inria.lille.repair.nopol.NoFailingTestCaseException;
-import fr.inria.lille.repair.nopol.NoPolLauncher;
-import fr.inria.lille.repair.nopol.NoSuspiciousStatementException;
+import fr.inria.lille.repair.nopol.NoPol;
+import fr.inria.lille.repair.nopol.NopolResult;
+import xxl.java.library.JavaLibrary;
 
 import java.io.File;
 import java.util.Collections;
@@ -26,25 +26,29 @@ public class InternalNopolActor extends UntypedActor {
 
 			ConfigActor configActor = (ConfigActor) message;
 
-			Config config = configActor.getConfig();
+			NopolContext nopolContext = configActor.getNopolContext();
 			File tempDirectory = Files.createTempDir();
 			UnZiper.unZipIt(configActor.getContent(), tempDirectory.getAbsolutePath());
 			ActorRef client = configActor.getClient();
 
-			if (config.getSynthesis() == Config.NopolSynthesis.SMT) {
-				config.setSolverPath(pathToSolver);
+			if (nopolContext.getSynthesis() == NopolContext.NopolSynthesis.SMT) {
+				nopolContext.setSolverPath(pathToSolver);
 			}
 
-			config.setProjectSourcePath(new String[] {tempDirectory.toString() + "/src/"});
-			config.setProjectClasspath(getClasspathFromTargetFolder(new File(tempDirectory.getCanonicalPath() + "/target")));
+			String sourceFile = tempDirectory.toString() + "/src/";
+			String classPath = getClasspathFromTargetFolder(new File(tempDirectory.getCanonicalPath() + "/target/"));
 
 			System.out.println(tempDirectory);
 
 			List<Patch> patches = Collections.EMPTY_LIST;
+			nopolContext.setProjectSources(sourceFile);
+			nopolContext.setProjectClasspath(JavaLibrary.classpathFrom(classPath));
+			nopolContext.setComplianceLevel(8);
+
 			try {
-				patches = NoPolLauncher.launch(config.buildSourceFiles(), config.buildClasspath(), config);
-			} catch (NoSuspiciousStatementException | NoFailingTestCaseException noFix) {
-				client.tell(noFix, ActorRef.noSender());
+				NoPol noPol = new NoPol(nopolContext);
+				NopolResult status = noPol.build();
+				patches = status.getPatches();
 			} catch (Exception e) {
 				throw new RuntimeException("Error launch NoPol", e);
 			} finally {

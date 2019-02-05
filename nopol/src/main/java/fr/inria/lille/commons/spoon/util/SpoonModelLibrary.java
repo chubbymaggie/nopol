@@ -1,12 +1,21 @@
 package fr.inria.lille.commons.spoon.util;
 
 import spoon.Launcher;
-import spoon.compiler.Environment;
-import spoon.compiler.SpoonCompiler;
-import spoon.reflect.code.*;
+import spoon.SpoonModelBuilder;
+import spoon.reflect.code.BinaryOperatorKind;
+import spoon.reflect.code.CtBinaryOperator;
+import spoon.reflect.code.CtBlock;
+import spoon.reflect.code.CtBreak;
+import spoon.reflect.code.CtCatch;
+import spoon.reflect.code.CtExpression;
+import spoon.reflect.code.CtIf;
+import spoon.reflect.code.CtLiteral;
+import spoon.reflect.code.CtLocalVariable;
+import spoon.reflect.code.CtStatement;
+import spoon.reflect.code.CtThrow;
+import spoon.reflect.code.CtTry;
+import spoon.reflect.code.CtWhile;
 import spoon.reflect.declaration.CtElement;
-import spoon.reflect.factory.CodeFactory;
-import spoon.reflect.factory.CoreFactory;
 import spoon.reflect.factory.Factory;
 import spoon.reflect.reference.CtTypeReference;
 import xxl.java.container.classic.MetaList;
@@ -32,19 +41,16 @@ public class SpoonModelLibrary {
 
     public static Factory modelFor(Factory factory, File[] sourceFiles, URL[] classpath) {
         factory.getEnvironment().setLevel("OFF");
-        try {
-            SpoonCompiler compiler = launcher().createCompiler(factory);
-            if (classpath != null) {
-                compiler.setSourceClasspath(JavaLibrary.asFilePath(classpath));
-            }
-            for (int i = 0; i < sourceFiles.length; i++) {
-                File sourceFile = sourceFiles[i];
-                compiler.addInputSource(sourceFile);
-            }
-            compiler.build();
-        } catch (Exception e) {
-            e.printStackTrace();
+        factory.getEnvironment().setCommentEnabled(false);
+        SpoonModelBuilder compiler = launcher().createCompiler(factory);
+        if (classpath != null) {
+            compiler.setSourceClasspath(JavaLibrary.asFilePath(classpath));
         }
+        for (int i = 0; i < sourceFiles.length; i++) {
+            File sourceFile = sourceFiles[i];
+            compiler.addInputSource(sourceFile);
+        }
+        compiler.build();
         return factory;
     }
 
@@ -95,7 +101,7 @@ public class SpoonModelLibrary {
 
     public static <T> CtLocalVariable<T> newLocalVariable(Factory factory, Class<T> aClass, String variableName) {
         CtLocalVariable<T> variable = factory.Core().createLocalVariable();
-        variable.setType(newTypeReference(factory, aClass));
+        variable.setType((CtTypeReference<T>) newTypeReference(factory, aClass).unbox());
         variable.setSimpleName(variableName);
         return variable;
     }
@@ -215,18 +221,6 @@ public class SpoonModelLibrary {
     public static void setLoopingCondition(CtWhile loop, CtExpression<Boolean> loopingCondition) {
         setParent(loop, loopingCondition);
         loop.setLoopingExpression(loopingCondition);
-    }
-
-    public static CoreFactory coreFactoryOf(CtElement element) {
-        return element.getFactory().Core();
-    }
-
-    public static CodeFactory codeFactoryOf(CtElement element) {
-        return element.getFactory().Code();
-    }
-
-    public static Environment newEnvironment() {
-        return newFactory().getEnvironment();
     }
 
     public static Factory newFactory() {

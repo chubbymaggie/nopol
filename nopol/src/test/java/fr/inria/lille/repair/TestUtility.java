@@ -1,15 +1,18 @@
 package fr.inria.lille.repair;
 
 import fr.inria.lille.commons.synthesis.smt.solver.SolverFactory;
-import fr.inria.lille.repair.common.config.Config;
+import fr.inria.lille.commons.synthesis.smt.solver.Z3SolverFactory;
+import fr.inria.lille.repair.common.config.NopolContext;
 import fr.inria.lille.repair.common.patch.Patch;
-import fr.inria.lille.repair.common.synth.StatementType;
+import fr.inria.lille.repair.common.synth.RepairType;
 import fr.inria.lille.repair.nopol.NoPol;
+import fr.inria.lille.repair.nopol.NopolResult;
 import xxl.java.container.classic.MetaSet;
 import xxl.java.junit.TestCase;
 import xxl.java.junit.TestCasesListener;
 import xxl.java.junit.TestSuiteExecution;
 import xxl.java.library.FileLibrary;
+import xxl.java.library.JavaLibrary;
 
 import java.io.File;
 import java.net.URLClassLoader;
@@ -25,51 +28,63 @@ import static org.junit.Assert.assertTrue;
 public class TestUtility {
 
 	private static final String SOLVER = "z3";
-	private static final String SOLVER_PATH = "lib/z3/z3_for_linux";
+	private static final String SOLVER_PATH_DIR = "lib/z3/";
+	private static final String SOLVER_NAME_LINUX = "z3_for_linux";
+	private static final String SOLVER_NAME_MAC = "z3_for_mac";
+	public static String solverPath;
 
-	public static ProjectReference projectForExample(String executionType, int nopolExampleNumber) {
-		String sourceFile = "../test-projects/src/";
-		String classpath = "../test-projects/target/test-classes" + File.pathSeparatorChar + "../test-projects/target/classes" + File.pathSeparatorChar + "misc/nopol-example/junit-4.11.jar";
-		String[] testClasses = new String[]{executionType + "_examples." + executionType + "_example_"
-				+ nopolExampleNumber + ".NopolExampleTest"};
-		return new ProjectReference(sourceFile, classpath, testClasses);
+	static {
+		if (Z3SolverFactory.isMac()) {
+			solverPath = SOLVER_PATH_DIR+SOLVER_NAME_MAC;
+		} else {
+			solverPath = SOLVER_PATH_DIR+SOLVER_NAME_LINUX;
+		}
 	}
 
-	public static List<Patch> patchFor(String executionType, ProjectReference project, Config config) {
-		for (int i = 0; i < project.sourceFiles().length; i++) {
-			File file = project.sourceFiles()[i];
-			clean(file.getParent());
-		}
+	public static NopolContext configForExample(String executionType, int nopolExampleNumber) {
+		String packageName = executionType + "_examples." + executionType + "_example_"
+				+ nopolExampleNumber;
+		String sourceFile = "../test-projects/src/main/java/"+packageName.replace('.','/');
+		String classpath = "../test-projects/target/test-classes" + File.pathSeparatorChar + "../test-projects/target/classes" + File.pathSeparatorChar + "lib/junit-4.11.jar";
+		String[] testClasses = new String[]{packageName + ".NopolExampleTest"};
+		return new NopolContext(sourceFile, JavaLibrary.classpathFrom(classpath), testClasses);
+	}
+
+	public static List<Patch> patchFor(String executionType, NopolContext nopolContext) {
+		nopolContext.setLocalizer(nopolContext.getLocalizer());
+
 		List<Patch> patches;
 		switch (executionType) {
 			case "symbolic":
-				config.setOracle(Config.NopolOracle.SYMBOLIC);
+				nopolContext.setOracle(NopolContext.NopolOracle.SYMBOLIC);
 				break;
 			case "nopol":
-				config.setOracle(Config.NopolOracle.ANGELIC);
+				nopolContext.setOracle(NopolContext.NopolOracle.ANGELIC);
 				break;
 			default:
 				throw new RuntimeException("Execution type not found");
 		}
-		NoPol nopol = new NoPol(project.sourceFiles(), project.classpath(), config);
-		patches = nopol.build(project.testClasses());
 
-		for (int i = 0; i < project.sourceFiles().length; i++) {
-			File file = project.sourceFiles()[i];
+		NoPol nopol = new NoPol(nopolContext);
+		NopolResult status = nopol.build();
+
+		for (int i = 0; i < nopolContext.getProjectSources().length; i++) {
+			File file = nopolContext.getProjectSources()[i];
 			clean(file.getParent());
 		}
-		return patches;
+		return status.getPatches();
 	}
 
-	public static List<Patch> setupAndRun(String executionType, int projectNumber, Config config, TestCasesListener listener) {
-		ProjectReference project = projectForExample(executionType, projectNumber);
-		SolverFactory.setSolver(SOLVER, SOLVER_PATH);
-		URLClassLoader classLoader = new URLClassLoader(project.classpath());
-		TestSuiteExecution.runCasesIn(project.testClasses(), classLoader, listener, config);
-		return patchFor(executionType, project, config);
+	public static List<Patch> setupAndRun(String executionType, int projectNumber, TestCasesListener listener, RepairType type) {
+		NopolContext nopolContext = configForExample(executionType, projectNumber);
+		nopolContext.setType(type);
+		SolverFactory.setSolver(SOLVER, solverPath);
+		URLClassLoader classLoader = new URLClassLoader(nopolContext.getProjectClasspath());
+		TestSuiteExecution.runCasesIn(nopolContext.getProjectTests(), classLoader, listener, nopolContext);
+		return patchFor(executionType, nopolContext);
 	}
 
-	public static void assertPatches(int linePosition, Collection<String> expectedFailedTests, StatementType expectedType, TestCasesListener listener, List<Patch> patches) {
+	public static void assertPatches(int linePosition, Collection<String> expectedFailedTests, RepairType expectedType, TestCasesListener listener, List<Patch> patches) {
 		Collection<String> failedTests = TestCase.testNames(listener
 				.failedTests());
 		Patch patch = patches.get(0);

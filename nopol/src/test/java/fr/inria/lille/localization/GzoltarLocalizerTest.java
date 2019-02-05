@@ -2,6 +2,7 @@ package fr.inria.lille.localization;
 
 import fr.inria.lille.localization.metric.Metric;
 import fr.inria.lille.localization.metric.Ochiai;
+import fr.inria.lille.repair.common.config.NopolContext;
 import fr.inria.lille.repair.nopol.SourceLocation;
 import org.junit.Test;
 
@@ -10,8 +11,8 @@ import java.net.URL;
 import java.util.List;
 import java.util.Map;
 
-import static gov.nasa.jpf.util.test.TestJPF.assertEquals;
-import static gov.nasa.jpf.util.test.TestJPF.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 /**
  * Created by bdanglot on 10/4/16.
@@ -31,7 +32,9 @@ public class GzoltarLocalizerTest {
 				new File("../test-projects/target/test-classes").toURI().toURL()
 		};
 		String[] testClasses = new String[]{"nopol_examples.nopol_example_1.NopolExampleTest"};
-		GZoltarFaultLocalizer localizer = new GZoltarFaultLocalizer(classpath, testClasses);
+
+		NopolContext nopolContext = new NopolContext(sources, classpath, testClasses);
+		GZoltarFaultLocalizer localizer = GZoltarFaultLocalizer.createInstance(nopolContext);
 		Map<SourceLocation, List<TestResult>> executedSourceLocationPerTest = localizer.getTestListPerStatement();
 		assertEquals(5, executedSourceLocationPerTest.keySet().size());//Gzoltar does not log in constructor: so there is only 5 logged statement
 
@@ -47,7 +50,7 @@ public class GzoltarLocalizerTest {
 		assertTrue(executedSourceLocationPerTest.keySet().contains(sourceLocation4));
 		assertTrue(executedSourceLocationPerTest.keySet().contains(sourceLocation5));
 
-		List<AbstractStatement> sortedStatements = localizer.getStatements();
+		List<? extends StatementSourceLocation> sortedStatements = localizer.getStatements();
 
 		assertEquals(0.534, sortedStatements.get(0).getSuspiciousness(), 10E-3);
 		assertEquals(0.5, sortedStatements.get(1).getSuspiciousness(), 10E-3);
@@ -56,6 +59,39 @@ public class GzoltarLocalizerTest {
 		assertEquals(0.0, sortedStatements.get(4).getSuspiciousness(), 10E-3);
 
 		//Rank 1
-		assertEquals(sourceLocation5, ((StatementSourceLocation)sortedStatements.get(0)).getLocation());
+		assertEquals(sourceLocation5, sortedStatements.get(0).getLocation());
 	}
+
+	@Test
+	public void testGzoltarLocalizer2() throws Exception {
+
+
+		File[] sources = new File[]{new File("../test-projects/src/main/java/nopol_examples/nopol_example_1/NopolExample.java")};
+		URL[] classpath = new URL[]{
+				new File("../test-projects/target/classes").toURI().toURL(),
+				new File("../test-projects/target/test-classes").toURI().toURL()
+		};
+		String[] testClasses = new String[]{"nopol_examples.nopol_example_1.NopolExampleTest#test1"};
+
+		NopolContext nopolContext = new NopolContext(sources, classpath, testClasses);
+		GZoltarFaultLocalizer localizer = GZoltarFaultLocalizer.createInstance(nopolContext);
+		Map<SourceLocation, List<TestResult>> executedSourceLocationPerTest = localizer.getTestListPerStatement();
+		assertEquals(5, executedSourceLocationPerTest.keySet().size());//Gzoltar does not log in constructor: so there is only 5 logged statement
+
+		SourceLocation sourceLocation2 = new SourceLocation("nopol_examples.nopol_example_1.NopolExample", 13);
+		SourceLocation sourceLocation3 = new SourceLocation("nopol_examples.nopol_example_1.NopolExample", 12);
+
+		for (SourceLocation loc : executedSourceLocationPerTest.keySet()) {
+			for (TestResult res : executedSourceLocationPerTest.get(loc)) {
+				assertEquals("nopol_examples.nopol_example_1.NopolExampleTest#test1", res.getTestCase().toString());
+			}
+		}
+
+		System.out.println(executedSourceLocationPerTest);
+		assertTrue(executedSourceLocationPerTest.keySet().contains(sourceLocation2));
+		assertTrue(executedSourceLocationPerTest.keySet().contains(sourceLocation3));
+
+
+	}
+
 }

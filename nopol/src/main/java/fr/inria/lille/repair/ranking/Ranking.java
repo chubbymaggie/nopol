@@ -5,12 +5,10 @@ import com.gzoltar.core.instr.testing.TestResult;
 import fr.inria.lille.localization.AbstractStatement;
 import fr.inria.lille.localization.GZoltarFaultLocalizer;
 import fr.inria.lille.localization.StatementExt;
-import fr.inria.lille.repair.ProjectReference;
-import fr.inria.lille.repair.TestClassesFinder;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import fr.inria.lille.localization.StatementSourceLocation;
+import fr.inria.lille.repair.common.finder.TestClassesFinder;
+import fr.inria.lille.repair.common.config.NopolContext;
 
-import java.io.File;
 import java.io.IOException;
 import java.net.URL;
 import java.util.Collection;
@@ -19,38 +17,20 @@ import java.util.List;
 
 public class Ranking {
 
-	@Deprecated
-	private final Logger logger = LoggerFactory.getLogger(this.getClass());
-	@Deprecated
-	private final File sourceFile[];
-
 	private URL[] classpath;
 	private final GZoltarFaultLocalizer gZoltar;
 	private String[] testClasses;
 
-	public Ranking(File[] sourceFile, URL[] classpath, String[] tests) {
-		this(new ProjectReference(sourceFile, classpath, tests));
-	}
-
-	public Ranking(final File[] sourceFile, final URL[] classpath) {
-		this(new ProjectReference(sourceFile, classpath));
-	}
-
-	public Ranking(ProjectReference project) {
-		this.classpath = project.classpath();
-		this.sourceFile = project.sourceFiles();
-		this.testClasses = project.testClasses();
+	public Ranking(NopolContext nopolContext) {
+		this.classpath = nopolContext.getProjectClasspath();
+		this.testClasses = nopolContext.getProjectTests();
 
 		// get all test classes of the current project
 		if (this.testClasses.length == 0) {
 			this.testClasses = new TestClassesFinder().findIn(classpath, false);
 		}
 		// init gzoltar
-		try {
-			gZoltar = new GZoltarFaultLocalizer(classpath, testClasses);
-		} catch (IOException e) {
-			throw new RuntimeException(e);
-		}
+		gZoltar = GZoltarFaultLocalizer.createInstance(nopolContext);
 	}
 
 	public String summary() {
@@ -58,7 +38,7 @@ public class Ranking {
 		int successfulTests = 0;
 		int nbTest = 0;
 
-		List<AbstractStatement> suspiciousStatements = gZoltar.getStatements();
+		List<? extends StatementSourceLocation> suspiciousStatements = gZoltar.getStatements();
 
 
 		String output = "";

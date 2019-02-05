@@ -22,7 +22,7 @@ import fr.inria.lille.commons.trace.RuntimeValues;
 import fr.inria.lille.commons.trace.Specification;
 import fr.inria.lille.commons.trace.SpecificationTestCasesListener;
 import fr.inria.lille.localization.TestResult;
-import fr.inria.lille.repair.common.config.Config;
+import fr.inria.lille.repair.common.config.NopolContext;
 import fr.inria.lille.repair.nopol.SourceLocation;
 import fr.inria.lille.repair.nopol.jpf.JPFUtil;
 import fr.inria.lille.repair.nopol.spoon.LoggingInstrumenter;
@@ -43,16 +43,28 @@ import xxl.java.junit.TestSuiteExecution;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.MalformedURLException;
 import java.net.URL;
-import java.util.*;
-import java.util.concurrent.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.logging.Level;
 
 /**
  * Execute
  *
  * @author Thomas Durieux
  */
-public final class JPFRunner<T> implements AngelicValue<T> {
+public final class JPFRunner<T> implements InstrumentedProgram<T> {
 
 	private final Logger logger = LoggerFactory.getLogger(this.getClass());
 	private final RuntimeValues<T> runtimeValues;
@@ -64,12 +76,12 @@ public final class JPFRunner<T> implements AngelicValue<T> {
 	private final File outputCompiledFile = new File("target-gen");
 	private final SpoonedProject cleanSpoon;
 	private boolean find = false;
-	private Config config;
+	private NopolContext nopolContext;
 
 	public JPFRunner(RuntimeValues<T> runtimeValues,
 					 SourceLocation sourceLocation, NopolProcessor processor,
-					 SpoonedFile spooner, final SpoonedProject cleanSpoon, Config config) {
-		this.config = config;
+					 SpoonedFile spooner, final SpoonedProject cleanSpoon, NopolContext nopolContext) {
+		this.nopolContext = nopolContext;
 		this.sourceLocation = sourceLocation;
 		this.runtimeValues = runtimeValues;
 		this.spoon = spooner;
@@ -78,7 +90,7 @@ public final class JPFRunner<T> implements AngelicValue<T> {
 	}
 
 	@Override
-	public Collection<Specification<T>> buildFor(final URL[] classpath, final List<TestResult> testClasses, final Collection<TestCase> failures) {
+	public Collection<Specification<T>> collectSpecifications(final URL[] classpath, final List<TestResult> testClasses, final Collection<TestCase> failures) {
 		SpoonedClass fork = cleanSpoon.forked(sourceLocation.getContainingClassName());
 		final LoggingInstrumenter<T> logging = createLoggingInstrumenter();
 		final ClassLoader unitTestClassLoader = fork.processedAndDumpedToClassLoader(logging);
@@ -86,13 +98,12 @@ public final class JPFRunner<T> implements AngelicValue<T> {
 
 		if (this.find) {
 			logging.disable();
-			TestSuiteExecution.runTestResult(testClasses, unitTestClassLoader, listener, config);
+			TestSuiteExecution.runTestResult(testClasses, unitTestClassLoader, listener, nopolContext);
 		}
-		return listener.specifications();
+		return listener.specificationsForAllTests();
 	}
 
-	@Override
-	public Collection<Specification<T>> buildFor(final URL[] classpath, final String[] testClasses, final Collection<TestCase> failures) {
+	public Collection<Specification<T>> collectSpecifications(final URL[] classpath, final String[] testClasses, final Collection<TestCase> failures) {
 		final LoggingInstrumenter<T> logging = createLoggingInstrumenter();
 		SpoonedClass fork = cleanSpoon.forked(sourceLocation.getContainingClassName());
 		final ClassLoader unitTestClassLoader = fork.processedAndDumpedToClassLoader(logging);
@@ -101,9 +112,9 @@ public final class JPFRunner<T> implements AngelicValue<T> {
 
 		if (this.find) {
 			logging.disable();
-			TestSuiteExecution.runCasesIn(testClasses, unitTestClassLoader, listener, config);
+			TestSuiteExecution.runCasesIn(testClasses, unitTestClassLoader, listener, nopolContext);
 		}
-		return listener.specifications();
+		return listener.specificationsForAllTests();
 	}
 
 	private LoggingInstrumenter<T> createLoggingInstrumenter() {
@@ -123,7 +134,49 @@ public final class JPFRunner<T> implements AngelicValue<T> {
 		return new LoggingInstrumenter<>(runtimeValues, processor);
 	}
 
-	private String createClassPath(final URL[] classpath) {
+	/**
+	 * Add JPF library to class path
+	 *
+	 * @param clpath
+	 */
+	private URL[] addJPFLibraryToCassPath(URL[] clpath) {
+		List<URL> classpath = new ArrayList<>();
+		String[] split = System.getProperty("java.class.path").split(File.pathSeparator);
+
+		for (int i = 0; i < split.length; i++) {
+			try {
+				classpath.add(new File(split[i]).toURL());
+			} catch (MalformedURLException e) {
+				e.printStackTrace();
+			}
+		}
+
+		for (int i = 0; i < clpath.length; i++) {
+			classpath.add(clpath[i]);
+		}
+		try {
+			File file = new File("lib/jpf/jpf-classes.jar");
+			if(!classpath.contains(file.toURL())) {
+				classpath.add(file.toURL());
+			}
+			// file = new File("lib/jpf/gov.nasa-0.0.1.jar");
+			// classpath[classpath.length - 3] = file.toURL();
+			file = new File("lib/jpf/jpf-annotations.jar");
+			if(!classpath.contains(file.toURL())) {
+				classpath.add(file.toURL());
+			}
+			file = new File("lib/junit-4.11.jar");
+			if(!classpath.contains(file.toURL())) {
+				classpath.add(file.toURL());
+			}
+		} catch (MalformedURLException e) {
+			throw new RuntimeException("JPF dependencies not found");
+		}
+		return classpath.toArray(new URL[]{});
+	}
+
+	private String createClassPath(URL[] classpath) {
+		classpath = addJPFLibraryToCassPath(classpath);
 		String stringClassPath = outputCompiledFile.getAbsolutePath() + File.pathSeparatorChar;
 		for (int i = 0; i < classpath.length; i++) {
 			URL url = classpath[i];
@@ -152,6 +205,7 @@ public final class JPFRunner<T> implements AngelicValue<T> {
 
 			gov.nasa.jpf.Config conf = JPFUtil.createConfig(args, mainClass, stringClassPath, outputSourceFile.getAbsolutePath());
 			final JPF jpf = new JPF(conf);
+			JPF.getLogger("class").setLevel(Level.ALL);
 
 			// executes JPF
 			JPFListener jpfListener = new JPFListener();
@@ -189,7 +243,7 @@ public final class JPFRunner<T> implements AngelicValue<T> {
 			boolean passed = executeTestAndCollectRuntimeValues(result, testCase, unitTestClassLoader, listener);
 			if (passed) {
 				this.find = true;
-				TestSuiteExecution.runTestCases(failures, unitTestClassLoader, listener, config);
+				TestSuiteExecution.runTestCases(failures, unitTestClassLoader, listener, nopolContext);
 				if (!passedTest.contains(testCase)) {
 					passedTest.add(testCase);
 				}
@@ -208,7 +262,7 @@ public final class JPFRunner<T> implements AngelicValue<T> {
 
 		LoggingInstrumenter.setValue(result);
 		Result testResult = TestSuiteExecution.runTestCase(currentTest,
-				unitTestClassLoader, listener, config);
+				unitTestClassLoader, listener, nopolContext);
 		if (testResult.getFailureCount() == 0) {
 			return true;
 		}

@@ -7,9 +7,9 @@ import fr.inria.lille.commons.spoon.util.SpoonModelLibrary;
 import fr.inria.lille.commons.spoon.util.SpoonStatementLibrary;
 import fr.inria.lille.commons.synthesis.CodeGenesis;
 import fr.inria.lille.commons.synthesis.ConstraintBasedSynthesis;
-import fr.inria.lille.repair.common.synth.StatementType;
+import fr.inria.lille.repair.common.synth.RepairType;
 import fr.inria.lille.repair.infinitel.loop.implant.LoopStatisticsTest;
-import fr.inria.lille.spirals.repair.synthesis.collect.spoon.DefaultConstantCollector;
+import fr.inria.lille.repair.synthesis.collect.spoon.DefaultConstantCollector;
 import org.junit.Ignore;
 import org.junit.Test;
 import spoon.Launcher;
@@ -140,14 +140,13 @@ public class ValuesCollectorTest {
 		RuntimeValues<Boolean> runtimeValues = RuntimeValues.newInstance();
 
 		Collection<Specification<Boolean>> specifications;
-		Collection<Map<String, Object>> inconsistencies;
+		Map<Map<String, Object>, Boolean> inconsistencies;
 		Map<String, Object> values1 = (Map) MetaMap.newHashMap(asList("a", "b"), asList(1, 2));
-		Map<String, Object> values2 = (Map) MetaMap.newHashMap(asList("c"), asList(3));
+		Map<String, Object> values2 = (Map) MetaMap.newHashMap(asList("a"), asList(3));
 		Map<String, Object> values3 = (Map) MetaMap.newHashMap(asList("a", "b"), asList(23, 32));
 		Specification<Boolean> spec1 = new Specification<Boolean>(values1, true); // first specs
 		Specification<Boolean> spec2 = new Specification<Boolean>(values2, true); // different input set
 		Specification<Boolean> spec3 = new Specification<Boolean>(values3, false); // new specs
-		Specification<Boolean> spec4 = new Specification<Boolean>(values3, true); // same input, different outcome
 
 		SpecificationTestCasesListener<Boolean> listener = new SpecificationTestCasesListener<Boolean>(runtimeValues);
 
@@ -161,65 +160,10 @@ public class ValuesCollectorTest {
 		runtimeValues.collectInput("b", values1.get("b"));
 		runtimeValues.collectOutput(true);
 		runtimeValues.collectionEnds();
-		assertFalse(runtimeValues.isEmpty());
 		listener.processSuccessfulRun(testA);
-		specifications = listener.specifications();
+		specifications = listener.specificationsForAllTests();
 		assertEquals(1, specifications.size());
 		assertTrue(specifications.contains(spec1));
-		inconsistencies = listener.inconsistentInputs();
-		assertTrue(inconsistencies.isEmpty());
-
-		 /* 2 input sets with different keys input: only keep the first input set: 1 spec and 1 inconsistency */
-
-		listener.processTestStarted(testB);
-		runtimeValues.collectInput("c", values2.get("c"));
-		runtimeValues.collectOutput(true);
-		runtimeValues.collectionEnds();
-		assertFalse(runtimeValues.isEmpty());
-		listener.processSuccessfulRun(testB);
-		specifications = listener.specifications();
-		assertEquals(1, specifications.size());
-		assertTrue(specifications.contains(spec1));
-		inconsistencies = listener.inconsistentInputs();
-		assertEquals(1, inconsistencies.size());
-		assertTrue(inconsistencies.containsAll(asList(spec2.inputs())));
-
-		/* 2 different sets of input: keep both specifications: 2 spec and 1 inconsistency */
-
-		listener.processTestStarted(testC);
-		runtimeValues.collectInput("a", values3.get("a"));
-		runtimeValues.collectInput("b", values3.get("b"));
-		runtimeValues.collectOutput(false);
-		runtimeValues.collectionEnds();
-		assertFalse(runtimeValues.isEmpty());
-		listener.processSuccessfulRun(testC);
-		listener.processAfterRun();
-		specifications = listener.specifications();
-		assertEquals(2, specifications.size());
-		assertTrue(specifications.contains(spec1));
-		assertTrue(specifications.contains(spec3));
-		inconsistencies = listener.inconsistentInputs();
-		assertEquals(1, inconsistencies.size());
-		assertTrue(inconsistencies.containsAll(asList(spec2.inputs())));
-
-		/* Same input set, different outcome: discard the newest: 2 specs and 2 inconsistency */
-
-		listener.processTestStarted(testC);
-		runtimeValues.collectInput("a", values3.get("a"));
-		runtimeValues.collectInput("b", values3.get("b"));
-		runtimeValues.collectOutput(true);
-		runtimeValues.collectionEnds();
-		assertFalse(runtimeValues.isEmpty());
-		listener.processSuccessfulRun(testC);
-		listener.processAfterRun();
-		specifications = listener.specifications();
-		assertEquals(2, specifications.size());
-		assertTrue(specifications.contains(spec1));
-		assertTrue(specifications.contains(spec3));
-		inconsistencies = listener.inconsistentInputs();
-		assertEquals(2, inconsistencies.size());
-		assertTrue(inconsistencies.containsAll(asList(spec2.inputs())));
-		assertTrue(inconsistencies.containsAll(asList(spec4.inputs())));
 	}
 
 	@Test
@@ -404,7 +348,7 @@ public class ValuesCollectorTest {
 
 		//first we run code genesis without collecting constants: i.e. the map is empty
 		CodeGenesis genesis = synthesis.codesSynthesisedFrom(
-				(StatementType.PRECONDITION).getType(), specifications);
+				(RepairType.PRECONDITION).getType(), specifications);
 		//TODO actually, the patch provided is good too, constants are not necessary
 		assertFalse(knownPatches.contains(genesis.returnStatement()));
 
@@ -419,7 +363,7 @@ public class ValuesCollectorTest {
 		assertEquals(3 , constants.size());
 
 		genesis = synthesis.codesSynthesisedFrom(
-				(StatementType.PRECONDITION).getType(), specifications);
+				(RepairType.PRECONDITION).getType(), specifications);
 		//the return statement is a known patch
 		assertTrue(knownPatches.contains(genesis.returnStatement()));
 	}

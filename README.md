@@ -13,29 +13,33 @@ If you use this code for academic research, please cite:
 }
 ```
 
-You can alternatively cite the previous paper ["Automatic Repair of Buggy If Conditions and Missing Preconditions with SMT"](http://hal.inria.fr/hal-00977798/PDF/NOPOL-Automatic-Repair-of-Buggy-If-Conditions-and-Missing-Preconditions-with-SMT.pdf) (Favio DeMarco, Jifeng Xuan, Daniel Le Berre, Martin Monperrus), In Proceedings of the 6th International Workshop on Constraints in Software Testing, Verification, and Analysis (CSTVA 2014) [(Bibtex)](http://www.monperrus.net/martin/bibtexbrowser.php?key=DeMarco2014&bib=monperrus.bib)
+Others papers about Nopol:
+* ["Automatic Repair of Buggy If Conditions and Missing Preconditions with SMT"](http://hal.inria.fr/hal-00977798/PDF/NOPOL-Automatic-Repair-of-Buggy-If-Conditions-and-Missing-Preconditions-with-SMT.pdf) (Favio DeMarco, Jifeng Xuan, Daniel Le Berre, Martin Monperrus), In Proceedings of the 6th International Workshop on Constraints in Software Testing, Verification, and Analysis (CSTVA 2014) [(Bibtex)](http://www.monperrus.net/martin/bibtexbrowser.php?key=DeMarco2014&bib=monperrus.bib)
+* [DynaMoth: Dynamic Code Synthesis for Automatic Program Repair](https://hal.archives-ouvertes.fr/hal-01279233/document) (Thomas Durieux, Martin Monperrus), In Proceedings of the 11th International Workshop in Automation of Software Test, 2016, describes the dynamic synthesis part of Nopol [(Bibtex)](http://www.monperrus.net/martin/bibtexbrowser.php?key=durieux%3Ahal-01279233&bib=monperrus.bib)  
+* [Automatic Repair of Infinite Loops](https://arxiv.org/pdf/1504.05078.pdf) (Sebastian Lamelas-Marcote and Martin Monperrus), Technical report hal-01144026, University of Lille, 2015, describes the Infinitel part. [(Bibtex)](http://www.monperrus.net/martin/bibtexbrowser.php?key=Lamelas2015&bib=monperrus.bib) 
 
-The dynamic synthesis part of Nopol is described in [DynaMoth: Dynamic Code Synthesis for Automatic Program Repair](https://hal.archives-ouvertes.fr/hal-01279233/document) (Thomas Durieux, Martin Monperrus), In Proceedings of the 11th International Workshop in Automation of Software Test, 2016. [(Bibtex)](http://www.monperrus.net/martin/bibtexbrowser.php?key=durieux%3Ahal-01279233&bib=monperrus.bib)
-
-
-## Getting started
+## Getting started
 
 Nopol requires Java and an SMT solver installed on the machine (e.g. Z3)
 
-1) CoCoSpoon:
+1) [CoCoSpoon](https://github.com/SpoonLabs/CoCoSpoon):
 
 ```
-$ git clone https://github.com/SpoonLabs/CoCoSpoon.git
-$ cd CoCoSpoon
-$ mvn clean install
+git clone https://github.com/SpoonLabs/CoCoSpoon.git
+cd CoCoSpoon
+mvn clean install
+cd ..
 ```
 
 2) Compile NoPol:
 
 ```
-$ cd ../nopol/nopol
-$ export JAVA_HOME=/usr/lib/jvm/java-7-openjdk-amd64
-$ mvn package -DskipTests
+git clone https://github.com/SpoonLabs/nopol.git
+cd nopol/nopol
+export JAVA_HOME=/usr/lib/jvm/java-7-openjdk-amd64
+
+# -DskipTests is required, to run the tests one needs to compile ../test-projects/ (see below)
+mvn package -DskipTests
 ```
 
 3) Locate the Nopol jar file produced at step 2)
@@ -54,22 +58,27 @@ $ cd ../test-projects/
 # compiling app (in target/classes) and tests (in target/test-classes), but don't run the tests (they obviously fail, because the goal is to repair them)
 $ mvn test -DskipTests 
 ```
+4b) Optional: run the tests of Nopol to check your installation
 
+```
+$ cd ../nopol/
+$ mvn test
+```
 
 5) Execute Nopol (parameters explained below)
 
 (Long commands are broken in several lines, separated by a backslash, which means an escaped linebreak in Unix shells.)
 
 ```
-$ cd ../test-projects/
-$ java -jar nopol.jar \
+cd ../test-projects/
+java -jar nopol.jar \
 -s src/main/java/ \
--c target/classes:target/test-classes:/home/martin/.m2/repository/junit/junit/4.11/junit-4.11.jar:/home/martin/.m2/repository/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar \
+-c target/classes:target/test-classes:/home/<user>/.m2/repository/junit/junit/4.11/junit-4.11.jar:/home/<user>/.m2/repository/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar \
 -t symbolic_examples.symbolic_example_1.NopolExampleTest \
 -p ../nopol/lib/z3/z3_for_linux
 ```
 
-If you keep `nopol.jar` instead of the actual jar located at the previous step, you'll get `Error: unable to access jarfile nopol.jar` (see above).
+If you keep `nopol.jar` instead of the actual jar located at the previous step, you'll get `Error: unable to access jarfile nopol.jar` (see above). You should replace also `<user>` by your own username.
 
 It should output something like:
 ```
@@ -126,6 +135,8 @@ Usage: java -jar nopol.jar
 
 ## Advanced Usage
 
+See also notes below.
+
 ```
 Usage: java -jar nopol.jar
 
@@ -153,12 +164,41 @@ Usage: java -jar nopol.jar
   [--maxTimeType <maxTimeType>]
         The maximum time execution in minute for one type of patch per per suspicious statement (eg. 5 minutes max to find a precondition at line x). (default: 5)
 
-  [(-z|--flocal) < ochiai|dumb|gzoltar>]
-        Define the fault localizer to be used. (default: ochiai)
+  [(-z|--flocal) < cocospoon|dumb|gzoltar>]
+        Define the fault localizer to be used. (default: cocospoon). 
+          "cocospoon" means source code instrumentation plus ochiai metric.
+          "dumb" means random fault localization. 
+          "gzoltar" means binary code instrumentation with external library plus ochiai metric.
 
 ```
 
+Notes: For using Dynamoth (`-y dynamoth`), you must add tools.jar in the classpath of Nopol, and use java with `-cp` (and not `-jar`):
+
+    java -cp $JAVA_HOME/lib/tools.jar:../nopol/target/nopol-SNAPSHOT-jar-with-dependencies.jar fr.inria.lille.repair.Main <nopol arguments>
+    
+## Examples of Real Bugs Targeted by Nopol:
+
+Apache Commons Math:
+
+* CM1 https://github.com/apache/commons-math/commit/eb4d267f51ff192b928be1d85ccb5f56015f19d3 (Percentile)
+* CM2 http://svn.apache.org/viewvc?view=revision&revision=141217 (MathUtils)
+* CM3 http://svn.apache.org/viewvc?view=revision&revision=141473 (MathUtils, "Changed factorial methods to return 1 for argument = 0.")
+* CM3 https://github.com/apache/commons-math/commit/dabf3a5beb9ab697d570154b9961078a8586c787 (MathUtils, "fixed overflow error in gdc computation, JIRA: MATH-238)
+* CM7 https://github.com/apache/commons-math/commit/0596e3145c1a8a9c42185fe688c42b0830b64516 (RandomDataImp, "Fixed parameter test in RandomDataImpl#nextExponential. JIRA: MATH-309.")
+* CM10 https://github.com/apache/commons-math/commit/49444ee6a56caee4eddc32c24dd960dd3195f7fa (Covariance, "Allow covariance to be computed for one-dimensional variables. JIRA: MATH-939")
+* PM2 https://github.com/apache/commons-math/commit/318d66e1b170a3b57d54d7175cfb3e495f6d7fda (MessageFactory, "allow either specific or generic formats to be null")
+
+Apache Commons Lang:
+
+* CL2 https://github.com/apache/commons-lang/commit/80da42a808874e691f70654446477421edf53e46 (StringUtils, "Handles empty string now as well.")
+* CL3 https://github.com/apache/commons-lang/commit/9a51cf5efc8b2b345a02f4d18e5800ca498d82cd (StringUtils, "Relax exceptions in left(), right() and mid()")
+* CL4 https://github.com/apache/commons-lang/commit/2f6b0b2c69b626d6a669aa8add3223417b3b274e (StrBuilder, "Fix indexOf and lastIndexOf with null input")
+
+Google GSON:
+
+* https://github.com/google/gson/commit/9a24219 (Apr 19, 2017, "negative zero test and fix")
+
 ## Contact
 
-For questions and feedback , please contact martin.monperrus@univ-lille1.fr
+For questions and feedback , please contact @monperrus
 
